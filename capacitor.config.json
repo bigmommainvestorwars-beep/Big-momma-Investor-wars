@@ -1,0 +1,34 @@
+{
+  "appId": "com.bigmomma.investorswar",
+  "appName": "BIG MOMMA: INVESTORS' WAR",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "ios": {
+    "preferredContentMode": "mobile",
+    "allowsLinkPreview": false,
+    "scheme": "BigMommaWar",
+    "overrideUserAgent": "BigMommaMobileApp",
+    "backgroundColor": "#030712",
+    "orientations": [
+      "UIInterfaceOrientationLandscapeLeft",
+      "UIInterfaceOrientationLandscapeRight"
+    ]
+  },
+  "android": {
+    "backgroundColor": "#030712",
+    "screenOrientation": "sensorLandscape",
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#030712",
+      "showSpinner": false
+    },
+    "ScreenOrientation": {
+      "defaultOrientation": "landscape"
+    }
+  }
+}

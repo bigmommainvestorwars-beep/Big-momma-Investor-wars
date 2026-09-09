@@ -1,0 +1,158 @@
+{
+  "entities": {
+    "users": {
+      "collectionName": "users",
+      "description": "User profiles and account states",
+      "fields": {
+        "uid": { "type": "string", "required": true },
+        "email": { "type": "string", "required": false },
+        "displayName": { "type": "string", "required": false },
+        "photoURL": { "type": "string", "required": false },
+        "accountStatus": { "type": "string", "required": true },
+        "createdAt": { "type": "number", "required": true },
+        "lastLoginAt": { "type": "number", "required": true }
+      }
+    },
+    "matches": {
+      "collectionName": "matches",
+      "description": "Authoritative game matches",
+      "fields": {
+        "matchId": { "type": "string", "required": true },
+        "boardId": { "type": "string", "required": true },
+        "rulesetVersion": { "type": "string", "required": true },
+        "status": { "type": "string", "required": true },
+        "currentPhase": { "type": "string", "required": true },
+        "currentPlayerId": { "type": "string", "required": false },
+        "turnNumber": { "type": "number", "required": true },
+        "roundNumber": { "type": "number", "required": true },
+        "stateVersion": { "type": "number", "required": true },
+        "participantUserIds": { "type": "array", "required": true },
+        "hostUserId": { "type": "string", "required": true },
+        "createdAt": { "type": "number", "required": true },
+        "updatedAt": { "type": "number", "required": true }
+      }
+    },
+    "players": {
+      "collectionName": "matches/{matchId}/players",
+      "description": "Players in a match",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "userId": { "type": "string", "required": true },
+        "displayName": { "type": "string", "required": true },
+        "currentSpaceIndex": { "type": "number", "required": true },
+        "status": { "type": "string", "required": true },
+        "inventory": { "type": "object", "required": true },
+        "turnOrder": { "type": "number", "required": true },
+        "netWorth": { "type": "number", "required": true }
+      }
+    },
+    "auctions": {
+      "collectionName": "matches/{matchId}/auctions",
+      "description": "Active and resolved auctions",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "matchId": { "type": "string", "required": true },
+        "assetId": { "type": "string", "required": true },
+        "status": { "type": "string", "required": true },
+        "currentHighestBid": { "type": "number", "required": true },
+        "currentHighestBidderId": { "type": "string", "required": false },
+        "expiresAt": { "type": "number", "required": true }
+      }
+    },
+    "bids": {
+      "collectionName": "matches/{matchId}/auctions/{auctionId}/bids",
+      "description": "Individual bids in an auction (subcollection to prevent unbounded document size)",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "auctionId": { "type": "string", "required": true },
+        "playerId": { "type": "string", "required": true },
+        "amount": { "type": "number", "required": true },
+        "timestamp": { "type": "number", "required": true }
+      }
+    },
+    "marketEvents": {
+      "collectionName": "matches/{matchId}/marketEvents",
+      "description": "Active market events for a match",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "title": { "type": "string", "required": true },
+        "isActive": { "type": "boolean", "required": true },
+        "activatedAtTurn": { "type": "number", "required": true }
+      }
+    },
+    "modifiers": {
+      "collectionName": "matches/{matchId}/modifiers",
+      "description": "Active temporary game modifiers",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "name": { "type": "string", "required": true },
+        "scope": { "type": "string", "required": true },
+        "remainingTurns": { "type": "number", "required": true }
+      }
+    },
+    "choices": {
+      "collectionName": "matches/{matchId}/choices",
+      "description": "Pending choices awaiting player decision",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "playerId": { "type": "string", "required": true },
+        "type": { "type": "string", "required": true },
+        "expiresAt": { "type": "number", "required": true }
+      }
+    },
+    "logs": {
+      "collectionName": "matches/{matchId}/logs",
+      "description": "Match gameplay event logs",
+      "fields": {
+        "id": { "type": "string", "required": true },
+        "turnNumber": { "type": "number", "required": true },
+        "type": { "type": "string", "required": true },
+        "summary": { "type": "string", "required": true },
+        "timestamp": { "type": "number", "required": true }
+      }
+    },
+    "idempotency": {
+      "collectionName": "matches/{matchId}/idempotency",
+      "description": "Server-internal idempotency locks and completed responses",
+      "fields": {
+        "requestId": { "type": "string", "required": true },
+        "status": { "type": "string", "required": true },
+        "actionType": { "type": "string", "required": true },
+        "createdAt": { "type": "number", "required": true }
+      }
+    },
+    "configurations": {
+      "collectionName": "configurations",
+      "description": "Ruleset, board, and game catalogs",
+      "fields": {
+        "configId": { "type": "string", "required": true },
+        "configType": { "type": "string", "required": true },
+        "version": { "type": "string", "required": true },
+        "updatedAt": { "type": "number", "required": true }
+      }
+    },
+    "securityEvents": {
+      "collectionName": "securityEvents",
+      "description": "Audit and anti-cheat security logs",
+      "fields": {
+        "eventId": { "type": "string", "required": true },
+        "eventType": { "type": "string", "required": true },
+        "severity": { "type": "string", "required": true },
+        "timestamp": { "type": "number", "required": true }
+      }
+    },
+    "systemErrors": {
+      "collectionName": "systemErrors",
+      "description": "System error telemetry records",
+      "fields": {
+        "errorId": { "type": "string", "required": true },
+        "severity": { "type": "string", "required": true },
+        "function": { "type": "string", "required": true },
+        "errorCode": { "type": "string", "required": true },
+        "message": { "type": "string", "required": true },
+        "timestamp": { "type": "number", "required": true },
+        "resolved": { "type": "boolean", "required": true }
+      }
+    }
+  }
+}

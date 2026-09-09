@@ -1,0 +1,137 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default behavior: DENY ALL
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.admin == true;
+    }
+
+    function isMatchParticipant(matchId) {
+      return isAuthenticated() && (
+        request.auth.uid in get(/databases/$(database)/documents/matches/$(matchId)).data.participantUserIds 
+        || isAdmin()
+      );
+    }
+
+    // Users collection:
+    // Users can read their own profile; admins can read any profile.
+    // Users can update basic profile fields (displayName, photoURL), but CANNOT elevate their role or account status.
+    match /users/{userId} {
+      allow read: if isUser(userId) || isAdmin();
+      allow create: if isUser(userId);
+      allow update: if isUser(userId) 
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'isAdmin', 'accountStatus', 'admin', 'scheduledDeletionAt'])
+        || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Configurations: Public read for rulesets, board layouts, and static configurations.
+    // Writeable only by verified admin.
+    match /configurations/{configId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Matches:
+    // Read: Open lobbies (status == 'waiting_for_players') can be discovered by all users.
+    // Active or finished matches can only be read by participants and admins.
+    // WRITE: STRICTLY FORBIDDEN FOR CLIENTS (all mutations are handled authoritatively by Cloud Functions using Admin SDK)
+    match /matches/{matchId} {
+      allow read: if resource.data.status == 'waiting_for_players'
+        || (isAuthenticated() && (
+          request.auth.uid in resource.data.participantUserIds 
+          || isAdmin()
+        ));
+      allow write: if false;
+
+      // Players subcollection:
+      // Read: Match participants, players viewing open lobbies, or admin
+      // Write: STRICTLY FORBIDDEN FOR CLIENTS (cash, position, SP, ownership must never be client-writable)
+      match /players/{playerId} {
+        allow read: if isMatchParticipant(matchId)
+          || get(/databases/$(database)/documents/matches/$(matchId)).data.status == 'waiting_for_players';
+        allow write: if false;
+      }
+
+      // Auctions subcollection:
+      // Read: ONLY match participants or admin
+      // Write: STRICTLY FORBIDDEN FOR CLIENTS (auction settlement & winners must never be client-writable)
+      match /auctions/{auctionId} {
+        allow read: if isMatchParticipant(matchId);
+        allow write: if false;
+
+        // Bids subcollection:
+        // Read: ONLY match participants or admin
+        // Write: STRICTLY FORBIDDEN FOR CLIENTS (bids must go through placeBid callable to validate funds & state)
+        match /bids/{bidId} {
+          allow read: if isMatchParticipant(matchId);
+          allow write: if false;
+        }
+      }
+
+      // Market Events subcollection:
+      // Read: ONLY match participants or admin
+      // Write: STRICTLY FORBIDDEN FOR CLIENTS
+      match /marketEvents/{eventId} {
+        allow read: if isMatchParticipant(matchId);
+        allow write: if false;
+      }
+
+      // Modifiers subcollection:
+      // Read: ONLY match participants or admin
+      // Write: STRICTLY FORBIDDEN FOR CLIENTS
+      match /modifiers/{modifierId} {
+        allow read: if isMatchParticipant(matchId);
+        allow write: if false;
+      }
+
+      // Pending Choices subcollection:
+      // Read: target player within match, or admin
+      // Write: STRICTLY FORBIDDEN FOR CLIENTS (choices must be submitted via submitMarketChoice callable)
+      match /choices/{choiceId} {
+        allow read: if isMatchParticipant(matchId) && (request.auth.uid == resource.data.playerId || isAdmin());
+        allow write: if false;
+      }
+
+      // Game Event Logs subcollection:
+      // Read: ONLY match participants or admin
+      // Write: STRICTLY FORBIDDEN FOR CLIENTS
+      match /logs/{logId} {
+        allow read: if isMatchParticipant(matchId);
+        allow write: if false;
+      }
+
+      // Idempotency subcollection:
+      // Read & Write: STRICTLY FORBIDDEN FOR CLIENTS (server internal only)
+      match /idempotency/{requestId} {
+        allow read, write: if false;
+      }
+    }
+
+    // Security Audit Events: Read-only for admins, client write forbidden
+    match /securityEvents/{eventId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // System Errors: Read-only for admins, client write forbidden
+    match /systemErrors/{errorId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "bigmomma-investor-wars-functions",
+  "version": "1.0.0",
+  "description": "Production Cloud Functions for Bigmomma Investor Wars",
+  "engines": {
+    "node": "22"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "clean": "rm -rf lib"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.1.0",
+    "firebase-functions": "^6.3.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  },
+  "private": true
+}

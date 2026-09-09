@@ -1,0 +1,443 @@
+/**
+ * Production Match Firestore Real-Time Synchronization Service
+ * Handles live subscriptions to matches, participant players, logs, auctions, and lobby listings.
+ */
+
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  where,
+  orderBy,
+  limit,
+  Unsubscribe,
+} from 'firebase/firestore';
+import { getFirebaseFirestore } from './config';
+import { errorHandler } from '../monitoring/errorHandler';
+
+export interface FirestoreMatchDoc {
+  id: string;
+  hostUserId: string;
+  boardId: string;
+  rulesetVersion: string;
+  status: 'waiting_for_players' | 'in_progress' | 'paused' | 'completed' | 'abandoned';
+  currentPhase: string;
+  currentPlayerId: string | null;
+  turnNumber: number;
+  roundNumber: number;
+  stateVersion: number;
+  participantUserIds: string[];
+  winnerId?: string | null;
+  isPrivate?: boolean;
+  accessCode?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface FirestorePlayerDoc {
+  id: string;
+  userId: string;
+  displayName: string;
+  avatarId?: string;
+  colorHex?: string;
+  currentSpaceIndex: number;
+  status: 'active' | 'bankrupt' | 'eliminated' | 'disconnected';
+  turnOrder: number;
+  netWorth: number;
+  cash: number;
+  specialPoints: number;
+  ownedSpaceIds: string[];
+  companyShareIds: string[];
+  modifierIds: string[];
+  isBot?: boolean;
+  connected: boolean;
+  lastActiveAt: number;
+}
+
+export interface FirestoreLogDoc {
+  id: string;
+  type: string;
+  sourcePlayerId?: string;
+  targetPlayerId?: string;
+  summary: string;
+  data?: Record<string, unknown>;
+  timestamp: number;
+}
+
+export interface FirestoreAuctionDoc {
+  id: string;
+  matchId: string;
+  assetId: string;
+  assetName?: string;
+  status: 'active' | 'settled' | 'cancelled';
+  currentHighestBid: number;
+  currentHighestBidderId: string | null;
+  expiresAt: number;
+  passedPlayerIds: string[];
+}
+
+export class MatchSyncService {
+  private matchListeners = new Map<string, Set<(match: FirestoreMatchDoc | null) => void>>();
+  private playersListeners = new Map<string, Set<(players: FirestorePlayerDoc[]) => void>>();
+  private logsListeners = new Map<string, Set<(logs: FirestoreLogDoc[]) => void>>();
+  private auctionListeners = new Map<string, Set<(auction: FirestoreAuctionDoc | null) => void>>();
+  private openMatchesListeners = new Set<(matches: FirestoreMatchDoc[]) => void>();
+  private localContainerProvider?: (matchId: string) => {
+    match: FirestoreMatchDoc;
+    players: FirestorePlayerDoc[];
+    logs: FirestoreLogDoc[];
+    activeAuction: FirestoreAuctionDoc | null;
+  } | undefined;
+  private localOpenMatchesProvider?: () => FirestoreMatchDoc[];
+
+  public registerLocalContainerProvider(
+    provider: (matchId: string) => {
+      match: FirestoreMatchDoc;
+      players: FirestorePlayerDoc[];
+      logs: FirestoreLogDoc[];
+      activeAuction: FirestoreAuctionDoc | null;
+    } | undefined
+  ): void {
+    this.localContainerProvider = provider;
+  }
+
+  public registerLocalOpenMatchesProvider(provider: () => FirestoreMatchDoc[]): void {
+    this.localOpenMatchesProvider = provider;
+  }
+
+  /**
+   * Dispatches local authoritative updates to registered subscribers
+   */
+  public dispatchLocalUpdate(
+    matchId: string,
+    match: FirestoreMatchDoc,
+    players: FirestorePlayerDoc[],
+    logs: FirestoreLogDoc[],
+    activeAuction: FirestoreAuctionDoc | null
+  ): void {
+    const matchCopy = { ...match };
+    const playersCopy = [...players];
+    const logsCopy = [...logs];
+    const auctionCopy = activeAuction ? { ...activeAuction } : null;
+
+    const mListeners = this.matchListeners.get(matchId);
+    if (mListeners) {
+      for (const listener of mListeners) {
+        try {
+          listener(matchCopy);
+        } catch {
+          // ignore subscriber error
+        }
+      }
+    }
+
+    const pListeners = this.playersListeners.get(matchId);
+    if (pListeners) {
+      for (const listener of pListeners) {
+        try {
+          listener(playersCopy);
+        } catch {
+          // ignore subscriber error
+        }
+      }
+    }
+
+    const lListeners = this.logsListeners.get(matchId);
+    if (lListeners) {
+      for (const listener of lListeners) {
+        try {
+          listener(logsCopy);
+        } catch {
+          // ignore subscriber error
+        }
+      }
+    }
+
+    const aListeners = this.auctionListeners.get(matchId);
+    if (aListeners) {
+      for (const listener of aListeners) {
+        try {
+          listener(auctionCopy);
+        } catch {
+          // ignore subscriber error
+        }
+      }
+    }
+
+    if (match.status === 'waiting_for_players') {
+      for (const listener of this.openMatchesListeners) {
+        try {
+          listener([matchCopy]);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }
+
+  /**
+   * Subscribe to match document
+   */
+  public subscribeToMatch(
+    matchId: string,
+    onData: (match: FirestoreMatchDoc | null) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    if (!this.matchListeners.has(matchId)) {
+      this.matchListeners.set(matchId, new Set());
+    }
+    this.matchListeners.get(matchId)!.add(onData);
+
+    // Initial local dispatch if available
+    if (this.localContainerProvider) {
+      const local = this.localContainerProvider(matchId);
+      if (local) {
+        onData({ ...local.match });
+        // Local authoritative match: state is purely driven by local engine events
+        return () => {
+          this.matchListeners.get(matchId)?.delete(onData);
+        };
+      }
+    }
+
+    const db = getFirebaseFirestore();
+    let fsUnsub: Unsubscribe = () => {};
+
+    if (db) {
+      const matchRef = doc(db, 'matches', matchId);
+      fsUnsub = onSnapshot(
+        matchRef,
+        (snap) => {
+          if (snap.exists()) {
+            onData({ id: snap.id, ...snap.data() } as FirestoreMatchDoc);
+          }
+        },
+        (err) => {
+          if (onError) onError(err);
+        }
+      );
+    }
+
+    return () => {
+      this.matchListeners.get(matchId)?.delete(onData);
+      fsUnsub();
+    };
+  }
+
+  /**
+   * Subscribe to players subcollection
+   */
+  public subscribeToPlayers(
+    matchId: string,
+    onData: (players: FirestorePlayerDoc[]) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    if (!this.playersListeners.has(matchId)) {
+      this.playersListeners.set(matchId, new Set());
+    }
+    this.playersListeners.get(matchId)!.add(onData);
+
+    // Initial local dispatch if available
+    if (this.localContainerProvider) {
+      const local = this.localContainerProvider(matchId);
+      if (local) {
+        onData([...local.players]);
+        return () => {
+          this.playersListeners.get(matchId)?.delete(onData);
+        };
+      }
+    }
+
+    const db = getFirebaseFirestore();
+    let fsUnsub: Unsubscribe = () => {};
+
+    if (db) {
+      const playersRef = collection(db, 'matches', matchId, 'players');
+      fsUnsub = onSnapshot(
+        playersRef,
+        (snap) => {
+          const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
+          players.sort((a, b) => a.turnOrder - b.turnOrder);
+          onData(players);
+        },
+        (err) => {
+          if (onError) onError(err);
+        }
+      );
+    }
+
+    return () => {
+      this.playersListeners.get(matchId)?.delete(onData);
+      fsUnsub();
+    };
+  }
+
+  /**
+   * Subscribe to match logs (most recent 30 events)
+   */
+  public subscribeToLogs(
+    matchId: string,
+    onData: (logs: FirestoreLogDoc[]) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    if (!this.logsListeners.has(matchId)) {
+      this.logsListeners.set(matchId, new Set());
+    }
+    this.logsListeners.get(matchId)!.add(onData);
+
+    // Initial local dispatch if available
+    if (this.localContainerProvider) {
+      const local = this.localContainerProvider(matchId);
+      if (local) {
+        onData([...local.logs]);
+        return () => {
+          this.logsListeners.get(matchId)?.delete(onData);
+        };
+      }
+    }
+
+    const db = getFirebaseFirestore();
+    let fsUnsub: Unsubscribe = () => {};
+
+    if (db) {
+      const logsRef = collection(db, 'matches', matchId, 'logs');
+      const logsQuery = query(logsRef, orderBy('timestamp', 'desc'), limit(30));
+
+      fsUnsub = onSnapshot(
+        logsQuery,
+        (snap) => {
+          const logs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
+          onData(logs);
+        },
+        () => {
+          // Fallback if index is missing
+          const fallbackRef = collection(db, 'matches', matchId, 'logs');
+          onSnapshot(fallbackRef, (fallbackSnap) => {
+            const fallbackLogs = fallbackSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
+            fallbackLogs.sort((a, b) => b.timestamp - a.timestamp);
+            onData(fallbackLogs.slice(0, 30));
+          });
+        }
+      );
+    }
+
+    return () => {
+      this.logsListeners.get(matchId)?.delete(onData);
+      fsUnsub();
+    };
+  }
+
+  /**
+   * Subscribe to active auctions in match
+   */
+  public subscribeToAuctions(
+    matchId: string,
+    onData: (auction: FirestoreAuctionDoc | null) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    if (!this.auctionListeners.has(matchId)) {
+      this.auctionListeners.set(matchId, new Set());
+    }
+    this.auctionListeners.get(matchId)!.add(onData);
+
+    // Initial local dispatch if available
+    if (this.localContainerProvider) {
+      const local = this.localContainerProvider(matchId);
+      if (local) {
+        onData(local.activeAuction ? { ...local.activeAuction } : null);
+        return () => {
+          this.auctionListeners.get(matchId)?.delete(onData);
+        };
+      }
+    }
+
+    const db = getFirebaseFirestore();
+    let fsUnsub: Unsubscribe = () => {};
+
+    if (db) {
+      const auctionsRef = collection(db, 'matches', matchId, 'auctions');
+      const activeQuery = query(auctionsRef, where('status', '==', 'active'), limit(1));
+
+      fsUnsub = onSnapshot(
+        activeQuery,
+        (snap) => {
+          if (!snap.empty) {
+            const docSnap = snap.docs[0];
+            onData({ id: docSnap.id, ...docSnap.data() } as FirestoreAuctionDoc);
+          } else {
+            onData(null);
+          }
+        },
+        (err) => {
+          if (onError) onError(err);
+        }
+      );
+    }
+
+    return () => {
+      this.auctionListeners.get(matchId)?.delete(onData);
+      fsUnsub();
+    };
+  }
+
+  /**
+   * Subscribe to public open lobbies
+   */
+  public subscribeToOpenMatches(
+    onData: (matches: FirestoreMatchDoc[]) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    this.openMatchesListeners.add(onData);
+
+    if (this.localOpenMatchesProvider) {
+      try {
+        const localMatches = this.localOpenMatchesProvider();
+        if (localMatches.length > 0) {
+          onData(localMatches);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const db = getFirebaseFirestore();
+    let fsUnsub: Unsubscribe = () => {};
+
+    if (db) {
+      const matchesRef = collection(db, 'matches');
+      const lobbyQuery = query(matchesRef, where('status', '==', 'waiting_for_players'), limit(20));
+
+      fsUnsub = onSnapshot(
+        lobbyQuery,
+        (snap) => {
+          const remoteMatches = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() } as FirestoreMatchDoc))
+            .filter((m) => !m.isPrivate);
+          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          // Combine unique matches
+          const matchMap = new Map<string, FirestoreMatchDoc>();
+          for (const m of localMatches) matchMap.set(m.id, m);
+          for (const m of remoteMatches) matchMap.set(m.id, m);
+          onData(Array.from(matchMap.values()));
+        },
+        (err) => {
+          // Gracefully default to local open matches if unauthenticated or security rules active
+          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          onData(localMatches);
+          if (onError) onError(err);
+        }
+      );
+    } else {
+      const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+      onData(localMatches);
+    }
+
+    return () => {
+      this.openMatchesListeners.delete(onData);
+      fsUnsub();
+    };
+  }
+}
+
+export const matchSyncService = new MatchSyncService();
