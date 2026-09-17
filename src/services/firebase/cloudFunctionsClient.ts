@@ -47,7 +47,7 @@ export class CloudFunctionsClient {
   ): Promise<ServerResponseEnvelope<TRes>> {
     // In DEVELOPMENT/LOCAL TEST MODE, bypass Cloud Functions network calls and execute via Authoritative Local Engine
     if (cloudFunctionsLocalTestMode) {
-      return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
+      return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
     }
 
     try {
@@ -71,7 +71,7 @@ export class CloudFunctionsClient {
 
       if (isNotFoundOrUnavailable) {
         // Authoritative server execution fallback
-        return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
+        return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
       }
 
       const anyErr = err as any;
@@ -98,10 +98,10 @@ export class CloudFunctionsClient {
     }
   }
 
-  private executeAuthoritativeLocal<TReq, TRes>(
+  private async executeAuthoritativeLocal<TReq, TRes>(
     functionName: string,
     data: ServerRequestEnvelope<TReq>
-  ): ServerResponseEnvelope<TRes> {
+  ): Promise<ServerResponseEnvelope<TRes>> {
     const auth = getFirebaseAuth();
     const p = (data.payload || {}) as Record<string, unknown>;
     const currentUserId =
@@ -114,14 +114,55 @@ export class CloudFunctionsClient {
       case 'createMatch': {
         const boardId = (p.boardId as string) || 'default-standard-board';
         const rulesetVersion = (p.rulesetVersion as string) || '1.0.0';
+        const isPrivate = (p.isPrivate as boolean) || false;
+        const accessCode = p.accessCode as string | undefined;
         resultData = authoritativeServerEngine.createMatch(
           data.matchId,
           data.requestId,
           boardId,
           rulesetVersion,
           currentUserId,
-          currentDisplayName
+          currentDisplayName,
+          isPrivate,
+          accessCode
         );
+        break;
+      }
+      case 'findOrCreateQuickMatch': {
+        resultData = await authoritativeServerEngine.findOrCreateQuickMatch(
+          data.requestId,
+          currentUserId,
+          (p.displayName as string) || currentDisplayName,
+          {
+            isPrivate: p.isPrivate as boolean | undefined,
+            accessCode: p.accessCode as string | undefined,
+          }
+        );
+        break;
+      }
+      case 'joinMatchByAccessCode': {
+        resultData = await authoritativeServerEngine.joinMatchByAccessCode(
+          p.accessCode as string,
+          data.requestId,
+          currentUserId,
+          (p.displayName as string) || currentDisplayName
+        );
+        break;
+      }
+      case 'reconnectPlayer': {
+        resultData = authoritativeServerEngine.reconnectPlayer(
+          data.matchId,
+          data.requestId,
+          currentUserId
+        );
+        break;
+      }
+      case 'markPlayerDisconnected': {
+        authoritativeServerEngine.markPlayerDisconnected(
+          data.matchId,
+          currentUserId
+        );
+        resultData = { success: true };
         break;
       }
       case 'joinMatch': {
@@ -155,11 +196,13 @@ export class CloudFunctionsClient {
         break;
       }
       case 'requestRoll': {
+        const predeterminedRoll = (data.payload as any)?.predeterminedRoll;
         resultData = authoritativeServerEngine.requestRoll(
           data.matchId,
           data.requestId,
           currentUserId,
-          data.expectedStateVersion
+          data.expectedStateVersion,
+          predeterminedRoll
         );
         break;
       }
@@ -238,6 +281,36 @@ export class CloudFunctionsClient {
         );
         break;
       }
+      case 'mortgageProperty': {
+        resultData = authoritativeServerEngine.mortgageProperty(
+          data.matchId,
+          data.requestId,
+          currentUserId,
+          p.spaceId as string,
+          data.expectedStateVersion
+        );
+        break;
+      }
+      case 'unmortgageProperty': {
+        resultData = authoritativeServerEngine.unmortgageProperty(
+          data.matchId,
+          data.requestId,
+          currentUserId,
+          p.spaceId as string,
+          data.expectedStateVersion
+        );
+        break;
+      }
+      case 'liquidateProperty': {
+        resultData = authoritativeServerEngine.liquidateProperty(
+          data.matchId,
+          data.requestId,
+          currentUserId,
+          p.spaceId as string,
+          data.expectedStateVersion
+        );
+        break;
+      }
       case 'completeTurn': {
         resultData = authoritativeServerEngine.completeTurn(
           data.matchId,
@@ -268,11 +341,72 @@ export class CloudFunctionsClient {
   }
 
   // Convenience methods
-  public createMatch(matchId: string, requestId: string, boardId: string, rulesetVersion?: string) {
-    return this.call<{ boardId: string; rulesetVersion?: string }, unknown>('createMatch', {
+  public createMatch(
+    matchId: string,
+    requestId: string,
+    boardId: string = 'default-standard-board',
+    rulesetVersion: string = '1.0.0',
+    isPrivate: boolean = false,
+    accessCode?: string
+  ) {
+    return this.call<
+      {
+        boardId: string;
+        rulesetVersion?: string;
+        isPrivate?: boolean;
+        accessCode?: string;
+      },
+      unknown
+    >('createMatch', {
       matchId,
       requestId,
-      payload: { boardId, rulesetVersion },
+      payload: { boardId, rulesetVersion, isPrivate, accessCode },
+    });
+  }
+
+  public findOrCreateQuickMatch(
+    requestId: string,
+    displayName?: string,
+    isPrivate?: boolean,
+    accessCode?: string
+  ) {
+    return this.call<
+      { displayName?: string; isPrivate?: boolean; accessCode?: string },
+      { matchId: string; isNew: boolean; accessCode: string; player: any }
+    >('findOrCreateQuickMatch', {
+      matchId: 'matchmaking',
+      requestId,
+      payload: { displayName, isPrivate, accessCode },
+    });
+  }
+
+  public joinMatchByAccessCode(accessCode: string, requestId: string, displayName?: string) {
+    return this.call<
+      { accessCode: string; displayName?: string },
+      { matchId: string; player: any }
+    >('joinMatchByAccessCode', {
+      matchId: 'matchmaking',
+      requestId,
+      payload: { accessCode, displayName },
+    });
+  }
+
+  public reconnectPlayer(matchId: string, requestId: string) {
+    return this.call<
+      Record<string, never>,
+      { success: boolean; stateVersion: number; player: any }
+    >('reconnectPlayer', {
+      matchId,
+      requestId,
+      payload: {},
+    });
+  }
+
+  public markPlayerDisconnected(matchId: string) {
+    return this.call<Record<string, never>, { success: boolean }>('markPlayerDisconnected', {
+      matchId,
+      requestId: `disconnect_${Date.now()}`,
+      payload: {},
     });
   }
 
@@ -316,12 +450,12 @@ export class CloudFunctionsClient {
     });
   }
 
-  public requestRoll(matchId: string, requestId: string, expectedStateVersion?: number) {
-    return this.call<Record<string, never>, { roll: number; newSpace: number }>('requestRoll', {
+  public requestRoll(matchId: string, requestId: string, expectedStateVersion?: number, predeterminedRoll?: number) {
+    return this.call<{ predeterminedRoll?: number }, { roll: number; newSpace: number }>('requestRoll', {
       matchId,
       requestId,
       expectedStateVersion,
-      payload: {},
+      payload: { predeterminedRoll },
     });
   }
 
@@ -412,6 +546,57 @@ export class CloudFunctionsClient {
       expectedStateVersion,
       payload: { eventId, choiceId },
     });
+  }
+
+  public mortgageProperty(
+    matchId: string,
+    requestId: string,
+    spaceId: string,
+    expectedStateVersion?: number
+  ) {
+    return this.call<{ spaceId: string }, { result: string; cashGained: number; stateVersion: number }>(
+      'mortgageProperty',
+      {
+        matchId,
+        requestId,
+        expectedStateVersion,
+        payload: { spaceId },
+      }
+    );
+  }
+
+  public unmortgageProperty(
+    matchId: string,
+    requestId: string,
+    spaceId: string,
+    expectedStateVersion?: number
+  ) {
+    return this.call<{ spaceId: string }, { result: string; costPaid: number; stateVersion: number }>(
+      'unmortgageProperty',
+      {
+        matchId,
+        requestId,
+        expectedStateVersion,
+        payload: { spaceId },
+      }
+    );
+  }
+
+  public liquidateProperty(
+    matchId: string,
+    requestId: string,
+    spaceId: string,
+    expectedStateVersion?: number
+  ) {
+    return this.call<{ spaceId: string }, { result: string; cashGained: number; stateVersion: number }>(
+      'liquidateProperty',
+      {
+        matchId,
+        requestId,
+        expectedStateVersion,
+        payload: { spaceId },
+      }
+    );
   }
 
   public completeTurn(matchId: string, requestId: string, expectedStateVersion?: number) {

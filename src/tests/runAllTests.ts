@@ -6,6 +6,10 @@ import './foundation.test';
 import './firebaseBackend.test';
 import './phase2IntegrationAudit.test';
 import './phase3aProductionUI.test';
+import './threeDiceSystem.test';
+import './phase5IntegrationAudit.test';
+import './verify_runtime';
+import './verify_runtime_phase4';
 import test from 'node:test';
 
 test.after(() => {

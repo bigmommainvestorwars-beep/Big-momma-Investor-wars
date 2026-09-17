@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Landmark,
@@ -19,30 +19,44 @@ import {
   Building2,
   Trophy,
   AlertCircle,
+  TrendingUp,
   X,
   Volume2,
   VolumeX,
   Maximize2,
   Plus,
   Compass,
+  Settings,
 } from 'lucide-react';
 import { useGame } from '../../context/GameContext';
 import { useAuth } from '../../context/AuthContext';
 import { DEFAULT_STANDARD_SPACES } from '../../../config/boardConfig';
 import { BoardSpace } from '../../../types/board';
-import { CitySkylineBackground } from './CitySkylineBackground';
 import { CircularBoard52, BOARD_GROUP_THEMES } from './CircularBoard52';
+import { BoardEnvironmentSurround } from './environment/BoardEnvironmentSurround';
 import { PlayerHUDCard } from './PlayerHUDCard';
 import { DiceVisualizer } from './DiceVisualizer';
 import { LandingResolutionModal } from './LandingResolutionModal';
+import { HDSpacePopOutModal } from './popout/HDSpacePopOutModal';
 import { AuctionArena } from './AuctionArena';
 import { SPActionModal } from './SPActionModal';
-import { OrientationGuard } from './OrientationGuard';
+import { MarketChoiceModal } from './MarketChoiceModal';
+import { DebtRestructuringModal } from './DebtRestructuringModal';
 import { FoundationStatus } from '../FoundationStatus';
 import { MatchTestingConsole } from '../MatchTestingConsole';
 import { formatBM, formatSP } from '../../utils/currency';
-import { MainMenuOverlay } from './MainMenuOverlay';
-import { GameOverOverlay } from './GameOverOverlay';
+import { PauseMenuOverlay } from '../screens/PauseMenuOverlay';
+import { OrientationGuard } from '../ui/OrientationGuard';
+import { backgroundMusic } from '../../services/backgroundMusic';
+import {
+  DiceSkinManager,
+  type DiceSkinId,
+} from '../../../services/cosmetics/diceSkins';
+import { BackgroundMusicControl } from './audio/BackgroundMusicControl';
+import { NotificationCenterDrawer } from '../ui/NotificationCenterDrawer';
+import { NotificationService } from '../../../services/notifications/notificationService';
+import { BankruptcyVignetteOverlay } from './BankruptcyVignetteOverlay';
+import { CosmeticsManager, EquippedCosmeticsState } from '../../../services/cosmetics/cosmeticsManager';
 
 export const LandscapeGameScreen: React.FC = () => {
   const {
@@ -50,6 +64,8 @@ export const LandscapeGameScreen: React.FC = () => {
     players,
     logs,
     activeAuction,
+    pendingMarketChoice,
+    activeMarketEvent,
     matchError,
     isActionPending,
     clearMatchError,
@@ -62,6 +78,10 @@ export const LandscapeGameScreen: React.FC = () => {
     passAuction,
     resolveAuction,
     executeSPAction,
+    submitMarketChoice,
+    mortgageProperty,
+    unmortgageProperty,
+    liquidateProperty,
     completeTurn,
     executeBotTurn,
   } = useGame();
@@ -70,12 +90,69 @@ export const LandscapeGameScreen: React.FC = () => {
 
   // Local UI state
   const [selectedSpaceIndex, setSelectedSpaceIndex] = useState<number>(0);
-  const [lastRoll, setLastRoll] = useState<number | null>(null);
+  const [showSpacePopOut, setShowSpacePopOut] = useState<boolean>(false);
+  const [lastRoll, setLastRoll] = useState<[number, number] | null>(null);
   const [isRolling, setIsRolling] = useState<boolean>(false);
   const [showLandingModal, setShowLandingModal] = useState<boolean>(false);
   const [showSPModal, setShowSPModal] = useState<boolean>(false);
+  const [showDebtModal, setShowDebtModal] = useState<boolean>(false);
   const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
+  const [showPauseMenu, setShowPauseMenu] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(true);
+  const [equippedSkin, setEquippedSkin] = useState<DiceSkinId>(() =>
+    DiceSkinManager.getEquippedSkin()
+  );
+  const [cosmetics, setCosmetics] = useState<EquippedCosmeticsState>(() =>
+    CosmeticsManager.getEquippedState()
+  );
+  const [bankruptcyVignetteOpen, setBankruptcyVignetteOpen] = useState<boolean>(false);
+  const [bankruptPlayerName, setBankruptPlayerName] = useState<string>('');
+  const prevBankruptPlayerIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const unsubSkin = DiceSkinManager.subscribe((skin) => {
+      setEquippedSkin(skin);
+    });
+    const unsubCosmetics = CosmeticsManager.subscribe((state) => {
+      setCosmetics(state);
+    });
+    return () => {
+      unsubSkin();
+      unsubCosmetics();
+    };
+  }, []);
+
+  // Monitor for any player entering bankrupt status
+  useEffect(() => {
+    players.forEach((p) => {
+      if (p.status === 'bankrupt' && !prevBankruptPlayerIdsRef.current.has(p.id)) {
+        prevBankruptPlayerIdsRef.current.add(p.id);
+        setBankruptPlayerName(p.displayName);
+        setBankruptcyVignetteOpen(true);
+      }
+    });
+  }, [players]);
+
+  // Step 16 Movement synchronization: delay player token advancement until 3D dice completes landing & glow
+  const [pendingMovement, setPendingMovement] = useState<{
+    playerId: string;
+    targetSpace: number;
+    roll: number;
+  } | null>(null);
+  const [boardPlayerSpaces, setBoardPlayerSpaces] = useState<Record<string, number>>({});
+
+  // Displayed players on the circular board (holds token at starting space until dice landing completes)
+  const boardPlayers = useMemo(() => {
+    return players.map((p) => {
+      if (boardPlayerSpaces[p.id] !== undefined) {
+        return {
+          ...p,
+          currentSpaceIndex: boardPlayerSpaces[p.id],
+        };
+      }
+      return p;
+    });
+  }, [players, boardPlayerSpaces]);
 
   // Auto-play bot loop controls
   const [autoPlayBots, setAutoPlayBots] = useState<boolean>(true);
@@ -85,9 +162,13 @@ export const LandscapeGameScreen: React.FC = () => {
   const selectedSpace = DEFAULT_STANDARD_SPACES[selectedSpaceIndex] || DEFAULT_STANDARD_SPACES[0];
 
   // Identify Human vs Current Active player
-  const humanPlayer = players.find((p) => !p.isBot) || players[0] || null;
+  const humanPlayer =
+    players.find((p) => user?.uid && (p.userId === user.uid || p.id === user.uid)) ||
+    players.find((p) => !p.isBot) ||
+    players[0] ||
+    null;
   const currentPlayer = players.find((p) => p.id === match?.currentPlayerId) || null;
-  const isHumanTurn = Boolean(currentPlayer && !currentPlayer.isBot);
+  const isHumanTurn = Boolean(currentPlayer && humanPlayer && currentPlayer.id === humanPlayer.id);
 
   // Phase analysis
   const currentPhase = match?.currentPhase || 'TURN_START';
@@ -100,24 +181,35 @@ export const LandscapeGameScreen: React.FC = () => {
     (p.ownedSpaceIds || []).includes(selectedSpace.id)
   );
 
-  // Sync selected space when current player moves
+  // Non-stop background music playback while playing the game
   useEffect(() => {
-    if (currentPlayer) {
+    backgroundMusic.play();
+    return () => {
+      backgroundMusic.pause();
+    };
+  }, []);
+
+  // Sync selected space when current player moves (only when not actively in roll flight)
+  useEffect(() => {
+    if (currentPlayer && !isRolling && !pendingMovement) {
       setSelectedSpaceIndex(currentPlayer.currentSpaceIndex);
     }
-  }, [currentPlayer?.currentSpaceIndex]);
+  }, [currentPlayer?.currentSpaceIndex, isRolling, pendingMovement]);
 
-  // Trigger landing modal when human lands on a space in AWAITING_ACTION
+  // Trigger landing modal when human lands on a space in AWAITING_ACTION (guarded against active roll flight)
   useEffect(() => {
-    if (isHumanTurn && currentPhase === 'AWAITING_ACTION') {
+    if (isHumanTurn && currentPhase === 'AWAITING_ACTION' && !isRolling && !pendingMovement) {
       setShowLandingModal(true);
     }
-  }, [isHumanTurn, currentPhase]);
+  }, [isHumanTurn, currentPhase, isRolling, pendingMovement]);
 
-  // Autonomous Bot Runner Loop
+  // Autonomous Bot Runner Loop (Only Host triggers bot turns to prevent multi-client collision)
   useEffect(() => {
     if (!autoPlayBots || !match || match.status !== 'in_progress') return;
     if (!currentPlayer || !currentPlayer.isBot) return;
+
+    const isHost = !match.hostUserId || match.hostUserId === user?.uid || match.hostUserId === humanPlayer?.userId;
+    if (!isHost) return;
 
     const timer = setTimeout(async () => {
       try {
@@ -128,20 +220,147 @@ export const LandscapeGameScreen: React.FC = () => {
     }, botSpeedMs);
 
     return () => clearTimeout(timer);
-  }, [autoPlayBots, match?.status, currentPlayer?.id, currentPlayer?.isBot, match?.currentPhase, botSpeedMs]);
+  }, [autoPlayBots, match?.status, match?.hostUserId, user?.uid, humanPlayer?.userId, currentPlayer?.id, currentPlayer?.isBot, match?.currentPhase, botSpeedMs]);
 
-  // Handle human roll
+  // Push Notification Triggers: Your Turn Alert
+  const lastNotifiedTurnRef = useRef<number>(-1);
+  useEffect(() => {
+    if (
+      isHumanTurn &&
+      canRoll &&
+      match &&
+      match.status === 'in_progress' &&
+      match.turnNumber !== lastNotifiedTurnRef.current
+    ) {
+      lastNotifiedTurnRef.current = match.turnNumber;
+      NotificationService.triggerYourTurn(match.id, 60);
+    }
+  }, [isHumanTurn, canRoll, match?.turnNumber, match?.id, match?.status]);
+
+  // Push Notification Triggers: Opponent Roll Alert
+  const prevBotActionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (currentPlayer && currentPlayer.isBot && match?.currentPhase === 'AWAITING_ACTION') {
+      const actionKey = `${currentPlayer.id}-${match.turnNumber}-${currentPlayer.currentSpaceIndex}`;
+      if (prevBotActionRef.current !== actionKey) {
+        prevBotActionRef.current = actionKey;
+        const rolledSpace = DEFAULT_STANDARD_SPACES[currentPlayer.currentSpaceIndex];
+        NotificationService.triggerOpponentRoll(
+          currentPlayer.displayName,
+          7,
+          rolledSpace?.name || `Space #${currentPlayer.currentSpaceIndex}`
+        );
+      }
+    }
+  }, [currentPlayer?.id, currentPlayer?.isBot, match?.currentPhase, match?.turnNumber, currentPlayer?.currentSpaceIndex, currentPlayer?.displayName]);
+
+  // Push Notification Triggers: Auction Outbid Alert
+  const prevAuctionHighestBidderRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeAuction && humanPlayer) {
+      if (
+        prevAuctionHighestBidderRef.current === humanPlayer.id &&
+        activeAuction.currentHighestBidderId &&
+        activeAuction.currentHighestBidderId !== humanPlayer.id
+      ) {
+        const bidder = players.find((p) => p.id === activeAuction.currentHighestBidderId);
+        const propertyName =
+          activeAuction.assetName ||
+          DEFAULT_STANDARD_SPACES.find((s) => s.id === activeAuction.assetId)?.name ||
+          'Asset Space';
+        NotificationService.triggerAuctionOutbid(
+          propertyName,
+          activeAuction.currentHighestBid,
+          bidder?.displayName || 'Rival Investor'
+        );
+      }
+      prevAuctionHighestBidderRef.current = activeAuction.currentHighestBidderId || null;
+    } else if (!activeAuction) {
+      prevAuctionHighestBidderRef.current = null;
+    }
+  }, [
+    activeAuction?.currentHighestBidderId,
+    activeAuction?.currentHighestBid,
+    activeAuction?.assetId,
+    activeAuction?.assetName,
+    humanPlayer?.id,
+    players,
+  ]);
+
+  // Handle human roll: Generate random result first, then animate 3D dice toward it
   const handleRollDice = async () => {
     if (!canRoll || isRolling || isActionPending) return;
+
+    // Step 1: Generate the random result first for TWO dice
+    const d1 = Math.floor(Math.random() * 6) + 1;
+    const d2 = Math.floor(Math.random() * 6) + 1;
+    const totalRoll = d1 + d2;
+
+    // Immediately designate the final face target before launch
+    setLastRoll([d1, d2]);
+
+    // 1. Button press effect & start rolling sequence
     setIsRolling(true);
+
     try {
-      const res = await requestRoll();
-      setLastRoll(res.roll);
-      setSelectedSpaceIndex(res.newSpace);
+      // Retain pre-roll space on the board during 3D flight
+      const startingSpace = currentPlayer?.currentSpaceIndex ?? 0;
+      if (currentPlayer) {
+        setBoardPlayerSpaces((prev) => ({
+          ...prev,
+          [currentPlayer.id]: startingSpace,
+        }));
+      }
+
+      // Execute authoritative roll recording with predetermined result
+      const res = await requestRoll(totalRoll);
+      const finalRoll = res.roll;
+      const finalSpace = res.newSpace;
+
+      // Ensure the array matches the server's sum if there was an override
+      // (If server override exists and doesn't match totalRoll, we split the server's finalRoll)
+      if (finalRoll !== totalRoll) {
+          const newD1 = Math.min(finalRoll - 1, 6);
+          const newD2 = finalRoll - newD1;
+          setLastRoll([newD1, newD2]);
+      } else {
+          setLastRoll([d1, d2]);
+      }
+
+      setPendingMovement({
+        playerId: currentPlayer?.id || '',
+        targetSpace: finalSpace,
+        roll: finalRoll,
+      });
     } catch {
-      // Error handled by context
-    } finally {
       setIsRolling(false);
+      setPendingMovement(null);
+    }
+  };
+
+  // 16. Movement system begins once 3D dice lands and result glow appears
+  const handleDiceAnimationComplete = (result: number) => {
+    setIsRolling(false);
+
+    if (pendingMovement) {
+      const { playerId, targetSpace } = pendingMovement;
+
+      // Release board player position override so CircularBoard52 starts token hopping!
+      setBoardPlayerSpaces((prev) => {
+        const next = { ...prev };
+        delete next[playerId];
+        return next;
+      });
+
+      setSelectedSpaceIndex(targetSpace);
+      setPendingMovement(null);
+
+      // Trigger space action modal once hopping completes (~600ms)
+      setTimeout(() => {
+        if (isHumanTurn && currentPhase === 'AWAITING_ACTION') {
+          setShowLandingModal(true);
+        }
+      }, 650);
     }
   };
 
@@ -168,15 +387,6 @@ export const LandscapeGameScreen: React.FC = () => {
   return (
     <OrientationGuard>
       <div className="relative w-full min-h-screen bg-[#030712] text-slate-100 flex flex-col font-sans select-none overflow-x-hidden pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)]">
-        {(!match || match.status === 'waiting_for_players') && (
-          <MainMenuOverlay />
-        )}
-        {match?.status === 'completed' && (
-          <GameOverOverlay players={players} onPlayAgain={leaveMatch} />
-        )}
-        {/* Dynamic Futuristic Financial City Skyline */}
-        <CitySkylineBackground />
-
         {/* TOP NAVIGATION HUD (Landscape Responsive) */}
         <header className="relative z-30 w-full px-3 sm:px-6 py-2 bg-slate-950/85 backdrop-blur-md border-b border-slate-800/80 flex items-center justify-between gap-3">
           {/* Left Title & Match Info */}
@@ -204,21 +414,38 @@ export const LandscapeGameScreen: React.FC = () => {
             </div>
           </div>
 
-          {/* Center: Current Phase Badge */}
-          <div className="hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-700/80 shadow-inner">
-            <span className="text-[10px] font-mono text-slate-400 uppercase">Phase:</span>
-            <span className="text-xs font-mono font-bold text-cyan-300">
-              {currentPhase.replace('_', ' ')}
-            </span>
-            {currentPlayer && (
-              <span className="text-xs text-slate-300 font-medium">
-                ({currentPlayer.displayName})
+          {/* Center: Current Phase Badge & Macro Market Cycle */}
+          <div className="hidden md:flex items-center gap-2">
+            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-900 border border-slate-700/80 shadow-inner">
+              <span className="text-[10px] font-mono text-slate-400 uppercase">Phase:</span>
+              <span className="text-xs font-mono font-bold text-cyan-300">
+                {currentPhase.replace('_', ' ')}
               </span>
+              {currentPlayer && (
+                <span className="text-xs text-slate-300 font-medium">
+                  ({currentPlayer.displayName})
+                </span>
+              )}
+            </div>
+
+            {activeMarketEvent?.active && (
+              <div
+                id="header-macro-event-pill"
+                className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-mono shadow-sm"
+                title={`${activeMarketEvent.description} (${activeMarketEvent.roundsRemaining} rounds remaining)`}
+              >
+                <TrendingUp className="w-3.5 h-3.5 text-amber-400" />
+                <span className="font-bold">{activeMarketEvent.name}</span>
+                <span className="text-[10px] text-amber-400/80">({activeMarketEvent.roundsRemaining}R)</span>
+              </div>
             )}
           </div>
 
           {/* Right Controls */}
           <div className="flex items-center gap-1.5 sm:gap-2">
+            {/* Non-stop Background Music Controller */}
+            <BackgroundMusicControl />
+
             {/* AI Auto-play Toggle */}
             <button
               type="button"
@@ -247,16 +474,18 @@ export const LandscapeGameScreen: React.FC = () => {
               </span>
             </button>
 
-            {/* New 3-Bot Match Quick Restart */}
+            {/* In-Game Push Notification Drawer */}
+            <NotificationCenterDrawer />
+
+            {/* Pause Menu Toggle */}
             <button
               type="button"
-              onClick={() => createCustomBotMatch(3)}
-              disabled={isActionPending}
+              onClick={() => setShowPauseMenu(true)}
               className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-mono font-bold flex items-center gap-1 min-h-[36px] transition-colors"
-              title="Start fresh 4-player game with 3 autonomous bots"
+              title="Pause Menu"
             >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">New Match</span>
+              <Settings className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Menu</span>
             </button>
 
             {/* Diagnostics Panel Toggle */}
@@ -332,15 +561,20 @@ export const LandscapeGameScreen: React.FC = () => {
               </div>
             </div>
 
-            {/* 52-Space Circular Board */}
+            {/* 52-Space Circular Board with HD Skyscraper & Tree Surround */}
             <div className="w-full flex justify-center">
-              <CircularBoard52
-                players={players}
-                currentPlayerId={match?.currentPlayerId || null}
-                selectedSpaceIndex={selectedSpaceIndex}
-                onSelectSpace={(idx) => setSelectedSpaceIndex(idx)}
-                highlightSpaceIndex={currentPlayer?.currentSpaceIndex ?? null}
-              />
+              <BoardEnvironmentSurround>
+                <CircularBoard52
+                  players={boardPlayers}
+                  currentPlayerId={match?.currentPlayerId || null}
+                  selectedSpaceIndex={selectedSpaceIndex}
+                  onSelectSpace={(idx) => {
+                    setSelectedSpaceIndex(idx);
+                    setShowSpacePopOut(true);
+                  }}
+                  highlightSpaceIndex={currentPlayer?.currentSpaceIndex ?? null}
+                />
+              </BoardEnvironmentSurround>
             </div>
 
             {/* Central Space Inspection Pill */}
@@ -366,18 +600,31 @@ export const LandscapeGameScreen: React.FC = () => {
                 </div>
               </div>
 
-              <div className="text-right">
-                {selectedSpaceOwner ? (
-                  <div className="text-xs font-bold text-amber-400 font-mono">
-                    Owner: {selectedSpaceOwner.displayName.split(' ')[0]}
-                  </div>
-                ) : selectedSpace.baseCost ? (
-                  <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono border border-emerald-800 font-bold">
-                    Available
-                  </span>
-                ) : (
-                  <span className="text-[10px] font-mono text-slate-400">Special Space</span>
-                )}
+              <div className="flex items-center gap-3">
+                <div className="text-right">
+                  {selectedSpaceOwner ? (
+                    <div className="text-xs font-bold text-amber-400 font-mono">
+                      Owner: {selectedSpaceOwner.displayName.split(' ')[0]}
+                    </div>
+                  ) : selectedSpace.baseCost ? (
+                    <span className="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-mono border border-emerald-800 font-bold">
+                      Available
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono text-slate-400">Special Space</span>
+                  )}
+                </div>
+
+                <button
+                  id="inspect-hd-dossier-btn"
+                  type="button"
+                  onClick={() => setShowSpacePopOut(true)}
+                  className="px-2.5 py-1.5 rounded-lg bg-cyan-950/80 hover:bg-cyan-900/90 border border-cyan-500/50 text-cyan-300 text-xs font-mono font-bold flex items-center gap-1.5 transition-all shadow-md shadow-cyan-950/40 cursor-pointer"
+                  title="Inspect HD Pop-Out & GDD Entails"
+                >
+                  <Maximize2 className="w-3.5 h-3.5" />
+                  <span>HD Dossier</span>
+                </button>
               </div>
             </div>
           </section>
@@ -399,25 +646,38 @@ export const LandscapeGameScreen: React.FC = () => {
             )}
 
             {/* ACTIVE SYNDICATE PLAYERS (UP TO 4) */}
-            <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3 shadow-md">
-              <div className="flex items-center justify-between mb-2 px-1">
-                <h2 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                  <Trophy className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Investors Syndicate ({players.length}/4)</span>
-                </h2>
-                <span className="text-[10px] font-mono text-cyan-400">Standard: ƁM</span>
+            <div id="investors-syndicate-section" className="relative bg-slate-900/75 border border-slate-800/80 rounded-2xl p-3 shadow-md overflow-hidden">
+              {/* Subtle HD Scenery Backdrop - strictly contained within Investors Syndicate section */}
+              <div className="absolute inset-0 opacity-25 pointer-events-none z-0">
+                <img
+                  src="https://images.unsplash.com/photo-1444723121867-7a241cacace9?auto=format&fit=crop&w=1200&q=80"
+                  alt="Investors Syndicate Scenery Backdrop"
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover object-center filter saturate-[1.2] contrast-[1.1]"
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-900/60 to-slate-950/80" />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2">
-                {players.map((p, idx) => (
-                  <PlayerHUDCard
-                    key={p.id}
-                    player={p}
-                    index={idx}
-                    isCurrentTurn={p.id === match?.currentPlayerId}
-                    isHuman={!p.isBot}
-                  />
-                ))}
+              <div className="relative z-10">
+                <div className="flex items-center justify-between mb-2 px-1">
+                  <h2 className="text-xs font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <Trophy className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Investors Syndicate ({players.length}/4)</span>
+                  </h2>
+                  <span className="text-[10px] font-mono text-cyan-400">Standard: ƁM</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-2">
+                  {players.map((p, idx) => (
+                    <PlayerHUDCard
+                      key={p.id}
+                      player={p}
+                      index={idx}
+                      isCurrentTurn={p.id === match?.currentPlayerId}
+                      isHuman={!p.isBot}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -430,8 +690,16 @@ export const LandscapeGameScreen: React.FC = () => {
                     Action Terminal
                   </h3>
                 </div>
-                <span className="text-[10px] font-mono text-slate-400">
-                  {isHumanTurn ? 'Your Active Turn' : 'Autonomous Bot Turn'}
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+                  isHumanTurn
+                    ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 font-bold animate-pulse'
+                    : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {isHumanTurn
+                    ? 'Your Active Turn'
+                    : currentPlayer?.isBot
+                    ? `Bot: ${currentPlayer.displayName}`
+                    : `Waiting for ${currentPlayer?.displayName || 'Player'}`}
                 </span>
               </div>
 
@@ -442,7 +710,19 @@ export const LandscapeGameScreen: React.FC = () => {
                   isRolling={isRolling}
                   canRoll={canRoll}
                   onRoll={handleRollDice}
-                  disabledReason={!isHumanTurn ? 'Waiting for Bot' : currentPhase !== 'TURN_START' ? 'Turn in progress' : undefined}
+                  onAnimationComplete={handleDiceAnimationComplete}
+                  disabledReason={
+                    !isHumanTurn
+                      ? currentPlayer?.isBot
+                        ? `Waiting for ${currentPlayer.displayName} (Bot)`
+                        : `Waiting for ${currentPlayer?.displayName || 'Opponent'}`
+                      : currentPhase !== 'TURN_START'
+                      ? 'Turn in progress'
+                      : undefined
+                  }
+                  initialMaterial="glossy-plastic"
+                  equippedSkin={equippedSkin}
+                  onSkinChange={(skin) => DiceSkinManager.setEquippedSkin(skin)}
                 />
               </div>
 
@@ -495,6 +775,27 @@ export const LandscapeGameScreen: React.FC = () => {
                   >
                     <Zap className="w-3.5 h-3.5 text-indigo-400" />
                     <span>Strategy Points ({formatSP(humanPlayer.specialPoints)})</span>
+                  </button>
+                )}
+
+                {/* Corporate Debt & Mortgage Desk Trigger */}
+                {humanPlayer && (
+                  <button
+                    id="mortgage-restructuring-menu-btn"
+                    type="button"
+                    onClick={() => setShowDebtModal(true)}
+                    className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all min-h-[44px] cursor-pointer shadow-md ${
+                      humanPlayer.cash < 150
+                        ? 'bg-amber-600 hover:bg-amber-500 text-slate-950 shadow-amber-950/60 animate-pulse font-black'
+                        : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30'
+                    }`}
+                  >
+                    <Landmark className="w-3.5 h-3.5" />
+                    <span>
+                      {humanPlayer.cash < 150
+                        ? '⚠️ Debt Restructure / Mortgage'
+                        : `Mortgages & Debt (${(humanPlayer.mortgagedSpaceIds || []).length} Pledged)`}
+                    </span>
                   </button>
                 )}
 
@@ -591,21 +892,75 @@ export const LandscapeGameScreen: React.FC = () => {
           )}
         </AnimatePresence>
 
+        {/* OVERLAY: HD 52-SPACE GDD POPOUT MODAL */}
+        <AnimatePresence>
+          {showSpacePopOut && (
+            <HDSpacePopOutModal
+              spaceIndex={selectedSpaceIndex}
+              players={players}
+              humanPlayer={humanPlayer}
+              isHumanTurn={isHumanTurn}
+              currentPhase={currentPhase}
+              isActionPending={isActionPending}
+              onSelectSpace={(newIdx) => setSelectedSpaceIndex(newIdx)}
+              onClose={() => setShowSpacePopOut(false)}
+              onBuyProperty={handleBuyProperty}
+              onSendToAuction={handleSendToAuction}
+              onMortgageProperty={mortgageProperty}
+              onUnmortgageProperty={unmortgageProperty}
+              onLiquidateProperty={liquidateProperty}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* OVERLAY: CORPORATE DEBT RESTRUCTURING & MORTGAGE MODAL */}
+        <AnimatePresence>
+          {showDebtModal && humanPlayer && (
+            <DebtRestructuringModal
+              player={humanPlayer}
+              isActionPending={isActionPending}
+              onMortgageProperty={mortgageProperty}
+              onUnmortgageProperty={unmortgageProperty}
+              onLiquidateProperty={liquidateProperty}
+              onClose={() => setShowDebtModal(false)}
+            />
+          )}
+        </AnimatePresence>
+
         {/* OVERLAY: SP TACTICAL ABILITIES MODAL */}
         <AnimatePresence>
           {showSPModal && humanPlayer && (
             <SPActionModal
               player={humanPlayer}
+              allPlayers={players}
               isActionPending={isActionPending}
-              onExecute={async (actionId, cost) => {
+              onExecute={async (actionId, cost, targetId) => {
                 try {
-                  await executeSPAction(actionId, cost);
+                  await executeSPAction(actionId, cost, targetId);
                   setShowSPModal(false);
                 } catch {
                   // Handled
                 }
               }}
               onClose={() => setShowSPModal(false)}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* OVERLAY: MARKET EVENT / CHOICE BOARDROOM MODAL */}
+        <AnimatePresence>
+          {pendingMarketChoice && (
+            <MarketChoiceModal
+              pendingChoice={pendingMarketChoice}
+              activeMarketEvent={activeMarketEvent}
+              isActionPending={isActionPending}
+              onSubmitChoice={async (eventId, choiceId) => {
+                try {
+                  await submitMarketChoice(eventId, choiceId);
+                } catch {
+                  // Handled in context
+                }
+              }}
             />
           )}
         </AnimatePresence>
@@ -643,6 +998,21 @@ export const LandscapeGameScreen: React.FC = () => {
             </div>
           )}
         </AnimatePresence>
+
+        {/* OVERLAY: PAUSE MENU */}
+        <AnimatePresence>
+          {showPauseMenu && (
+            <PauseMenuOverlay onClose={() => setShowPauseMenu(false)} />
+          )}
+        </AnimatePresence>
+
+        {/* OVERLAY: BANKRUPTCY CINEMATIC VIGNETTE */}
+        <BankruptcyVignetteOverlay
+          isOpen={bankruptcyVignetteOpen}
+          vignetteId={cosmetics.vignette}
+          playerName={bankruptPlayerName}
+          onClose={() => setBankruptcyVignetteOpen(false)}
+        />
       </div>
     </OrientationGuard>
   );

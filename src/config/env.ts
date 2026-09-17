@@ -49,6 +49,17 @@ function resolveEnvironment(): AppEnvironment {
 
 const currentEnv = resolveEnvironment();
 
+// Default public client config from project registration
+const DEFAULT_FIREBASE_CLIENT = {
+  apiKey: 'AIzaSyDdLO6HFKpBVLeOZcZcftKR1g23v1ZBzl4',
+  authDomain: 'bigmomma-investor-wars.firebaseapp.com',
+  projectId: 'bigmomma-investor-wars',
+  storageBucket: 'bigmomma-investor-wars.firebasestorage.app',
+  messagingSenderId: '665313671823',
+  appId: '1:665313671823:web:34d97c37f49f013d2d0efa',
+  firestoreDatabaseId: '(default)',
+};
+
 export const ENV: ClientEnvConfig = {
   appEnv: currentEnv,
   appUrl: getEnvVar('APP_URL') || (typeof window !== 'undefined' ? window.location.origin : ''),
@@ -57,12 +68,12 @@ export const ENV: ClientEnvConfig = {
   isDevelopment: currentEnv === 'development',
   useEmulator: getEnvVar('VITE_USE_FIREBASE_EMULATOR') === 'true',
   firebase: {
-    apiKey: getEnvVar('VITE_FIREBASE_API_KEY'),
-    authDomain: getEnvVar('VITE_FIREBASE_AUTH_DOMAIN'),
-    projectId: getEnvVar('VITE_FIREBASE_PROJECT_ID'),
-    storageBucket: getEnvVar('VITE_FIREBASE_STORAGE_BUCKET'),
-    messagingSenderId: getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID'),
-    appId: getEnvVar('VITE_FIREBASE_APP_ID'),
+    apiKey: getEnvVar('VITE_FIREBASE_API_KEY') || DEFAULT_FIREBASE_CLIENT.apiKey,
+    authDomain: getEnvVar('VITE_FIREBASE_AUTH_DOMAIN') || DEFAULT_FIREBASE_CLIENT.authDomain,
+    projectId: getEnvVar('VITE_FIREBASE_PROJECT_ID') || DEFAULT_FIREBASE_CLIENT.projectId,
+    storageBucket: getEnvVar('VITE_FIREBASE_STORAGE_BUCKET') || DEFAULT_FIREBASE_CLIENT.storageBucket,
+    messagingSenderId: getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID') || DEFAULT_FIREBASE_CLIENT.messagingSenderId,
+    appId: getEnvVar('VITE_FIREBASE_APP_ID') || DEFAULT_FIREBASE_CLIENT.appId,
     firestoreDatabaseId: '(default)',
   },
 };

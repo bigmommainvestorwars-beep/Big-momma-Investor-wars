@@ -181,7 +181,7 @@ describe('Phase 2 Audit: Authoritative Engine & Bot Integration Loop', () => {
 
     // 4. Human Turn - Roll Dice (modulo 52 board)
     const rollRes = engine.requestRoll(matchId, 'req_roll_1', hostUserId, started.stateVersion);
-    assert.ok(rollRes.roll >= 1 && rollRes.roll <= 6);
+    assert.ok(rollRes.roll >= 2 && rollRes.roll <= 12, 'Roll result should be between 2 and 12');
     assert.ok(rollRes.newSpace >= 0 && rollRes.newSpace < 52);
 
     // 5. Complete Human Turn
@@ -252,5 +252,134 @@ describe('Phase 2 Audit: Authoritative Engine & Bot Integration Loop', () => {
     assert.strictEqual(auction.currentHighestBidderId, bot1.id);
     assert.ok(bot1.ownedSpaceIds.includes(auction.assetId), 'Winner must receive auctioned asset');
     assert.strictEqual(container.match.currentPhase, 'TURN_END');
+  });
+
+  it('should authoritatively execute Corporate Warfare SP abilities: Takeover, Freeze, Short Raid, and Shields', () => {
+    const engine = AuthoritativeServerEngine.getInstance();
+    engine.reset();
+
+    const matchId = `audit_warfare_${Date.now()}`;
+    const humanId = 'human_raider_1';
+
+    engine.createMatch(matchId, 'req_init_w', 'default-standard-board', '1.0.0', humanId, 'Corporate Raider');
+    const bot = engine.addBotPlayer(matchId, 'req_bw', 'Apex Rival');
+    const started = engine.startMatch(matchId, 'req_start_w');
+
+    const container = (engine as any).matches.get(matchId);
+    const human = container.players.get(humanId);
+    const rival = container.players.get(bot.id);
+
+    // Give players adequate cash and SP
+    human.specialPoints = 200;
+    human.cash = 2000;
+    rival.cash = 1000;
+    rival.specialPoints = 100;
+    // Assign rival a property
+    rival.ownedSpaceIds = ['space_1'];
+
+    // 1. Hostile Takeover Bid
+    const buyoutCost = Math.round(60 * 1.5); // base cost 60 * 1.5 = 90
+    const takeoverResult = engine.executeSPAction(
+      matchId,
+      'req_sp_takeover',
+      humanId,
+      'hostile_takeover',
+      50,
+      'space_1',
+      started.stateVersion
+    );
+    assert.strictEqual(takeoverResult.remainingSP, 150);
+    assert.ok(human.ownedSpaceIds.includes('space_1'), 'Human should now own space_1');
+    assert.ok(!rival.ownedSpaceIds.includes('space_1'), 'Rival should no longer own space_1');
+    assert.strictEqual(rival.cash, 1000 + buyoutCost, 'Rival should receive buyout cash');
+
+    // 2. Patent Freeze
+    const freezeResult = engine.executeSPAction(
+      matchId,
+      'req_sp_freeze',
+      humanId,
+      'patent_freeze',
+      35,
+      'space_1',
+      takeoverResult.stateVersion
+    );
+    assert.strictEqual(freezeResult.remainingSP, 115);
+    const freezeMod = container.activeModifiers?.find((m: any) => m.type === 'patent_freeze' && m.targetSpaceId === 'space_1');
+    assert.ok(freezeMod, 'Patent freeze modifier should be active');
+
+    // 3. Short Seller Raid
+    const rivalPreCash = rival.cash;
+    const shortResult = engine.executeSPAction(
+      matchId,
+      'req_sp_short',
+      humanId,
+      'short_attack',
+      40,
+      rival.id,
+      freezeResult.stateVersion
+    );
+    assert.strictEqual(shortResult.remainingSP, 75);
+    assert.strictEqual(rival.cash, rivalPreCash - 150, 'Rival should lose 150 ƁM from short raid');
+
+    // 4. Regulatory Harbor Shield
+    const shieldResult = engine.executeSPAction(
+      matchId,
+      'req_sp_shield',
+      humanId,
+      'regulatory_shield',
+      30,
+      undefined,
+      shortResult.stateVersion
+    );
+    assert.strictEqual(shieldResult.remainingSP, 45);
+    const shieldMod = container.activeModifiers?.find((m: any) => m.type === 'regulatory_shield' && m.targetPlayerId === humanId);
+    assert.ok(shieldMod, 'Regulatory shield modifier should be active');
+  });
+
+  it('should authoritatively support mortgage, unmortgage, and liquidation workflows', () => {
+    const engine = AuthoritativeServerEngine.getInstance();
+    engine.reset();
+
+    const matchId = `mortgage_test_${Date.now()}`;
+    const playerId = 'player_corp_1';
+
+    engine.createMatch(matchId, 'req_init_m', 'default-standard-board', '1.0.0', playerId, 'Corporate Titan');
+    engine.addBotPlayer(matchId, 'req_b_m', 'Apex Bot');
+    engine.startMatch(matchId, 'req_start_m');
+
+    const container = (engine as any).matches.get(matchId);
+    const player = container.players.get(playerId);
+    assert.ok(player);
+
+    // Give player a property
+    player.ownedSpaceIds = ['space_1'];
+    player.cash = 1000;
+
+    // 1. Mortgage property: gets 50% cash (baseCost of space)
+    const space = DEFAULT_STANDARD_SPACES.find((s) => s.id === 'space_1') || { baseCost: 60 };
+    const mortgageValue = Math.round((space.baseCost || 60) * 0.5);
+
+    const mRes = engine.mortgageProperty(matchId, 'req_m1', playerId, 'space_1');
+    assert.ok(mRes.cashGained > 0);
+    assert.strictEqual(player.cash, 1000 + mortgageValue);
+    assert.ok(player.mortgagedSpaceIds.includes('space_1'));
+
+    // Re-mortgage fails
+    assert.throws(() => {
+      engine.mortgageProperty(matchId, 'req_m2', playerId, 'space_1');
+    });
+
+    // 2. Lift mortgage: costs 55% cash (50% principal + 10% fee)
+    const unmortgageCost = Math.round((space.baseCost || 60) * 0.55);
+    const uRes = engine.unmortgageProperty(matchId, 'req_u1', playerId, 'space_1');
+    assert.ok(uRes.costPaid > 0);
+    assert.strictEqual(player.cash, 1000 + mortgageValue - unmortgageCost);
+    assert.ok(!player.mortgagedSpaceIds.includes('space_1'));
+
+    // 3. Liquidate property: surrendered to bank for 50% value
+    const lRes = engine.liquidateProperty(matchId, 'req_l1', playerId, 'space_1');
+    assert.ok(lRes.cashGained > 0);
+    assert.ok(!player.ownedSpaceIds.includes('space_1'));
+    assert.strictEqual(player.cash, 1000 + mortgageValue - unmortgageCost + mortgageValue);
   });
 });

@@ -123,7 +123,7 @@ describe('Phase 3A: Production UI & 25-Point Checklist Audit', () => {
 
     // Roll dice (DiceVisualizer test)
     const rollResult = engine.requestRoll(matchId, 'req_roll_1', hostUserId, started.stateVersion);
-    assert.ok(rollResult.roll >= 1 && rollResult.roll <= 6);
+    assert.ok(rollResult.roll >= 2 && rollResult.roll <= 12);
     assert.strictEqual(rollResult.newSpace, rollResult.roll % 52);
 
     // Multi-player visibility test: other bots remain on space 0 while human moved

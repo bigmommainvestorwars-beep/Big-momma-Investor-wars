@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { getFirebaseFirestore } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
+import { PendingMarketChoiceDoc, MarketEvent } from '../../types/marketEvent';
 
 export interface FirestoreMatchDoc {
   id: string;
@@ -48,6 +49,7 @@ export interface FirestorePlayerDoc {
   cash: number;
   specialPoints: number;
   ownedSpaceIds: string[];
+  mortgagedSpaceIds?: string[];
   companyShareIds: string[];
   modifierIds: string[];
   isBot?: boolean;
@@ -82,14 +84,29 @@ export class MatchSyncService {
   private playersListeners = new Map<string, Set<(players: FirestorePlayerDoc[]) => void>>();
   private logsListeners = new Map<string, Set<(logs: FirestoreLogDoc[]) => void>>();
   private auctionListeners = new Map<string, Set<(auction: FirestoreAuctionDoc | null) => void>>();
+  private pendingChoiceListeners = new Map<string, Set<(choice: PendingMarketChoiceDoc | null) => void>>();
+  private marketEventListeners = new Map<string, Set<(event: MarketEvent | null) => void>>();
   private openMatchesListeners = new Set<(matches: FirestoreMatchDoc[]) => void>();
   private localContainerProvider?: (matchId: string) => {
     match: FirestoreMatchDoc;
     players: FirestorePlayerDoc[];
     logs: FirestoreLogDoc[];
     activeAuction: FirestoreAuctionDoc | null;
+    pendingChoice?: PendingMarketChoiceDoc | null;
+    activeMarketEvent?: MarketEvent | null;
   } | undefined;
   private localOpenMatchesProvider?: () => FirestoreMatchDoc[];
+  private remoteSyncHandler?: (
+    type: 'match' | 'players' | 'auction' | 'logs',
+    matchId: string,
+    data: any
+  ) => void;
+
+  public registerRemoteSyncHandler(
+    handler: (type: 'match' | 'players' | 'auction' | 'logs', matchId: string, data: any) => void
+  ): void {
+    this.remoteSyncHandler = handler;
+  }
 
   public registerLocalContainerProvider(
     provider: (matchId: string) => {
@@ -97,6 +114,8 @@ export class MatchSyncService {
       players: FirestorePlayerDoc[];
       logs: FirestoreLogDoc[];
       activeAuction: FirestoreAuctionDoc | null;
+      pendingChoice?: PendingMarketChoiceDoc | null;
+      activeMarketEvent?: MarketEvent | null;
     } | undefined
   ): void {
     this.localContainerProvider = provider;
@@ -114,12 +133,16 @@ export class MatchSyncService {
     match: FirestoreMatchDoc,
     players: FirestorePlayerDoc[],
     logs: FirestoreLogDoc[],
-    activeAuction: FirestoreAuctionDoc | null
+    activeAuction: FirestoreAuctionDoc | null,
+    pendingChoice?: PendingMarketChoiceDoc | null,
+    activeMarketEvent?: MarketEvent | null
   ): void {
     const matchCopy = { ...match };
     const playersCopy = [...players];
     const logsCopy = [...logs];
     const auctionCopy = activeAuction ? { ...activeAuction } : null;
+    const choiceCopy = pendingChoice ? { ...pendingChoice } : null;
+    const eventCopy = activeMarketEvent ? { ...activeMarketEvent } : null;
 
     const mListeners = this.matchListeners.get(matchId);
     if (mListeners) {
@@ -165,6 +188,28 @@ export class MatchSyncService {
       }
     }
 
+    const cListeners = this.pendingChoiceListeners.get(matchId);
+    if (cListeners) {
+      for (const listener of cListeners) {
+        try {
+          listener(choiceCopy);
+        } catch {
+          // ignore subscriber error
+        }
+      }
+    }
+
+    const eListeners = this.marketEventListeners.get(matchId);
+    if (eListeners) {
+      for (const listener of eListeners) {
+        try {
+          listener(eventCopy);
+        } catch {
+          // ignore subscriber error
+        }
+      }
+    }
+
     if (match.status === 'waiting_for_players') {
       for (const listener of this.openMatchesListeners) {
         try {
@@ -194,10 +239,6 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData({ ...local.match });
-        // Local authoritative match: state is purely driven by local engine events
-        return () => {
-          this.matchListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
@@ -210,11 +251,14 @@ export class MatchSyncService {
         matchRef,
         (snap) => {
           if (snap.exists()) {
-            onData({ id: snap.id, ...snap.data() } as FirestoreMatchDoc);
+            const matchDoc = { id: snap.id, ...snap.data() } as FirestoreMatchDoc;
+            onData(matchDoc);
+            this.remoteSyncHandler?.('match', matchId, matchDoc);
           }
         },
         (err) => {
           if (onError) onError(err);
+          else console.warn('Match sync warning:', err.message);
         }
       );
     }
@@ -243,9 +287,6 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.players]);
-        return () => {
-          this.playersListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
@@ -260,9 +301,11 @@ export class MatchSyncService {
           const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
           players.sort((a, b) => a.turnOrder - b.turnOrder);
           onData(players);
+          this.remoteSyncHandler?.('players', matchId, players);
         },
         (err) => {
           if (onError) onError(err);
+          else console.warn('Players sync warning:', err.message);
         }
       );
     }
@@ -291,14 +334,12 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.logs]);
-        return () => {
-          this.logsListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
     const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
+    let fallbackUnsub: Unsubscribe = () => {};
 
     if (db) {
       const logsRef = collection(db, 'matches', matchId, 'logs');
@@ -309,15 +350,29 @@ export class MatchSyncService {
         (snap) => {
           const logs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
           onData(logs);
+          this.remoteSyncHandler?.('logs', matchId, logs);
         },
-        () => {
-          // Fallback if index is missing
-          const fallbackRef = collection(db, 'matches', matchId, 'logs');
-          onSnapshot(fallbackRef, (fallbackSnap) => {
-            const fallbackLogs = fallbackSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
-            fallbackLogs.sort((a, b) => b.timestamp - a.timestamp);
-            onData(fallbackLogs.slice(0, 30));
-          });
+        (err) => {
+          const isIndexMissing = (err as any)?.code === 'failed-precondition' || err?.message?.includes('index');
+          if (isIndexMissing) {
+            // Fallback if index is missing
+            const fallbackRef = collection(db, 'matches', matchId, 'logs');
+            fallbackUnsub = onSnapshot(
+              fallbackRef,
+              (fallbackSnap) => {
+                const fallbackLogs = fallbackSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
+                fallbackLogs.sort((a, b) => b.timestamp - a.timestamp);
+                onData(fallbackLogs.slice(0, 30));
+              },
+              (fallbackErr) => {
+                if (onError) onError(fallbackErr);
+                else console.warn('Fallback logs sync warning:', fallbackErr.message);
+              }
+            );
+          } else {
+            if (onError) onError(err);
+            else console.warn('Logs sync warning:', err.message);
+          }
         }
       );
     }
@@ -325,6 +380,7 @@ export class MatchSyncService {
     return () => {
       this.logsListeners.get(matchId)?.delete(onData);
       fsUnsub();
+      fallbackUnsub();
     };
   }
 
@@ -346,9 +402,6 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeAuction ? { ...local.activeAuction } : null);
-        return () => {
-          this.auctionListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
@@ -364,13 +417,17 @@ export class MatchSyncService {
         (snap) => {
           if (!snap.empty) {
             const docSnap = snap.docs[0];
-            onData({ id: docSnap.id, ...docSnap.data() } as FirestoreAuctionDoc);
+            const auctionDoc = { id: docSnap.id, ...docSnap.data() } as FirestoreAuctionDoc;
+            onData(auctionDoc);
+            this.remoteSyncHandler?.('auction', matchId, auctionDoc);
           } else {
             onData(null);
+            this.remoteSyncHandler?.('auction', matchId, null);
           }
         },
         (err) => {
           if (onError) onError(err);
+          else console.warn('Auctions sync warning:', err.message);
         }
       );
     }
@@ -426,6 +483,7 @@ export class MatchSyncService {
           const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
           onData(localMatches);
           if (onError) onError(err);
+          else console.warn('Lobby sync warning:', err.message);
         }
       );
     } else {
@@ -435,6 +493,102 @@ export class MatchSyncService {
 
     return () => {
       this.openMatchesListeners.delete(onData);
+      fsUnsub();
+    };
+  }
+
+  /**
+   * Subscribe to pending market choice
+   */
+  public subscribeToPendingChoice(
+    matchId: string,
+    onData: (choice: PendingMarketChoiceDoc | null) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    if (!this.pendingChoiceListeners.has(matchId)) {
+      this.pendingChoiceListeners.set(matchId, new Set());
+    }
+    this.pendingChoiceListeners.get(matchId)!.add(onData);
+
+    // Initial local dispatch if available
+    if (this.localContainerProvider) {
+      const local = this.localContainerProvider(matchId);
+      if (local) {
+        onData(local.pendingChoice ? { ...local.pendingChoice } : null);
+      }
+    }
+
+    const db = getFirebaseFirestore();
+    let fsUnsub: Unsubscribe = () => {};
+
+    if (db) {
+      const docRef = doc(db, 'matches', matchId, 'marketChoices', 'current');
+      fsUnsub = onSnapshot(
+        docRef,
+        (snap) => {
+          if (snap.exists()) {
+            onData(snap.data() as PendingMarketChoiceDoc);
+          } else {
+            onData(null);
+          }
+        },
+        (err) => {
+          if (onError) onError(err);
+          else console.warn('Pending choice sync warning:', err.message);
+        }
+      );
+    }
+
+    return () => {
+      this.pendingChoiceListeners.get(matchId)?.delete(onData);
+      fsUnsub();
+    };
+  }
+
+  /**
+   * Subscribe to active market event
+   */
+  public subscribeToActiveMarketEvent(
+    matchId: string,
+    onData: (event: MarketEvent | null) => void,
+    onError?: (err: Error) => void
+  ): Unsubscribe {
+    if (!this.marketEventListeners.has(matchId)) {
+      this.marketEventListeners.set(matchId, new Set());
+    }
+    this.marketEventListeners.get(matchId)!.add(onData);
+
+    // Initial local dispatch if available
+    if (this.localContainerProvider) {
+      const local = this.localContainerProvider(matchId);
+      if (local) {
+        onData(local.activeMarketEvent ? { ...local.activeMarketEvent } : null);
+      }
+    }
+
+    const db = getFirebaseFirestore();
+    let fsUnsub: Unsubscribe = () => {};
+
+    if (db) {
+      const docRef = doc(db, 'matches', matchId, 'marketEvents', 'active');
+      fsUnsub = onSnapshot(
+        docRef,
+        (snap) => {
+          if (snap.exists()) {
+            onData(snap.data() as MarketEvent);
+          } else {
+            onData(null);
+          }
+        },
+        (err) => {
+          if (onError) onError(err);
+          else console.warn('Active event sync warning:', err.message);
+        }
+      );
+    }
+
+    return () => {
+      this.marketEventListeners.get(matchId)?.delete(onData);
       fsUnsub();
     };
   }

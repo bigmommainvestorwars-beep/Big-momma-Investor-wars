@@ -4,7 +4,9 @@
  * and dispatches ActionRequests to Cloud Functions.
  */
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
+import { enableNetwork } from 'firebase/firestore';
+import { getFirebaseFirestore } from '../../services/firebase/config';
 import { GameState } from '../../types/game';
 import { ActionRequest } from '../../types/request';
 import { firestoreService } from '../../services/firebase/firestoreService';
@@ -22,6 +24,7 @@ import { cloudFunctionsClient } from '../../services/firebase/cloudFunctionsClie
 import { useAuth } from './AuthContext';
 import { botRunnerService } from '../../bot/botRunnerService';
 import { PRESET_BOT_PROFILES } from '../../bot/botTypes';
+import { PendingMarketChoiceDoc, MarketEvent } from '../../types/marketEvent';
 
 export interface GameContextValue {
   // Matches state
@@ -30,10 +33,27 @@ export interface GameContextValue {
   players: FirestorePlayerDoc[];
   logs: FirestoreLogDoc[];
   activeAuction: FirestoreAuctionDoc | null;
+  pendingMarketChoice: PendingMarketChoiceDoc | null;
+  activeMarketEvent: MarketEvent | null;
   openMatches: FirestoreMatchDoc[];
   matchError: string | null;
   isActionPending: boolean;
   clearMatchError: () => void;
+
+  // Network Resilience & Reconnection Handshake
+  connectionStatus: 'connected' | 'reconnecting' | 'offline';
+  isOnline: boolean;
+  lastReconnectedAt: number | null;
+  reconnectHandshake: () => Promise<void>;
+
+  // Matchmaking Quick-Match Queue
+  matchmakingQueueState: 'idle' | 'searching' | 'matched' | 'joining';
+  queueTimeSeconds: number;
+  startQuickMatchQueue: () => Promise<string>;
+  cancelQuickMatchQueue: () => void;
+  fillRemainingWithBots: () => Promise<void>;
+  joinByRoomCode: (code: string) => Promise<void>;
+  createPrivateMatch: () => Promise<string>;
 
   // Match control actions
   setActiveMatchId: (matchId: string | null) => void;
@@ -47,7 +67,7 @@ export interface GameContextValue {
   startMatch: () => Promise<void>;
 
   // Gameplay actions
-  requestRoll: () => Promise<{ roll: number; newSpace: number }>;
+  requestRoll: (predeterminedRoll?: number) => Promise<{ roll: number; newSpace: number }>;
   buyProperty: () => Promise<void>;
   startSpaceAuction: () => Promise<void>;
   executeBotTurn: (botId?: string) => Promise<void>;
@@ -56,6 +76,9 @@ export interface GameContextValue {
   resolveAuction: (auctionId: string) => Promise<void>;
   executeSPAction: (actionId: string, spCost: number, targetPlayerId?: string) => Promise<void>;
   submitMarketChoice: (eventId: string, choiceId: string) => Promise<void>;
+  mortgageProperty: (spaceId: string) => Promise<void>;
+  unmortgageProperty: (spaceId: string) => Promise<void>;
+  liquidateProperty: (spaceId: string) => Promise<void>;
   completeTurn: () => Promise<void>;
 
   // Legacy compatibility fields
@@ -159,9 +182,119 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [players, setPlayers] = useState<FirestorePlayerDoc[]>([]);
   const [logs, setLogs] = useState<FirestoreLogDoc[]>([]);
   const [activeAuction, setActiveAuction] = useState<FirestoreAuctionDoc | null>(null);
+  const [pendingMarketChoice, setPendingMarketChoice] = useState<PendingMarketChoiceDoc | null>(null);
+  const [activeMarketEvent, setActiveMarketEvent] = useState<MarketEvent | null>(null);
   const [openMatches, setOpenMatches] = useState<FirestoreMatchDoc[]>([]);
   const [matchError, setMatchError] = useState<string | null>(null);
   const [isActionPending, setIsActionPending] = useState<boolean>(false);
+
+  // Network Resilience & Connection Handshake state
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('connected');
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [lastReconnectedAt, setLastReconnectedAt] = useState<number | null>(null);
+
+  // Matchmaking Quick-Match Queue state
+  const [matchmakingQueueState, setMatchmakingQueueState] = useState<'idle' | 'searching' | 'matched' | 'joining'>('idle');
+  const [queueTimeSeconds, setQueueTimeSeconds] = useState<number>(0);
+
+  // Active Match Session Recovery from LocalStorage
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('bigmomma_active_match_id');
+      if (saved && !activeMatchId) {
+        setActiveMatchId(saved);
+      }
+    } catch {
+      // LocalStorage access exception caught
+    }
+  }, []);
+
+  // Active Match Session Persistence
+  useEffect(() => {
+    try {
+      if (activeMatchId) {
+        localStorage.setItem('bigmomma_active_match_id', activeMatchId);
+      } else {
+        localStorage.removeItem('bigmomma_active_match_id');
+      }
+    } catch {
+      // LocalStorage access exception caught
+    }
+  }, [activeMatchId]);
+
+  // Reconnection handshake: synchronizes player session with Authoritative Server without forcing raw network probes
+  const reconnectHandshake = useCallback(async (): Promise<void> => {
+    setConnectionStatus('reconnecting');
+    try {
+      if (activeMatchId) {
+        const reqId = `reconnect_${Date.now()}`;
+        await cloudFunctionsClient.reconnectPlayer(activeMatchId, reqId);
+      }
+      setConnectionStatus('connected');
+      setIsOnline(true);
+      setLastReconnectedAt(Date.now());
+      setMatchError(null);
+    } catch (err) {
+      console.warn('Reconnection handshake notice:', err);
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        setConnectionStatus('connected');
+      } else {
+        setConnectionStatus('offline');
+      }
+    }
+  }, [activeMatchId]);
+
+  // Mobile Network Interface Switching Handshake Listener (Wi-Fi <-> Cellular / visibility changes)
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      setConnectionStatus('reconnecting');
+      if (activeMatchId) {
+        reconnectHandshake();
+      } else {
+        setConnectionStatus('connected');
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      setConnectionStatus('offline');
+      if (activeMatchId) {
+        cloudFunctionsClient.markPlayerDisconnected(activeMatchId).catch(() => {});
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && activeMatchId && (typeof navigator === 'undefined' || navigator.onLine)) {
+        reconnectHandshake();
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [activeMatchId, reconnectHandshake]);
+
+  // Matchmaking Queue Seconds Counter
+  useEffect(() => {
+    let interval: NodeJS.Timeout | null = null;
+    if (matchmakingQueueState === 'searching') {
+      interval = setInterval(() => {
+        setQueueTimeSeconds((prev) => prev + 1);
+      }, 1000);
+    } else {
+      setQueueTimeSeconds(0);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [matchmakingQueueState]);
 
   const clearMatchError = useCallback(() => {
     setMatchError(null);
@@ -215,7 +348,23 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setMatch(data);
         setMatchError(null);
       },
-      (err) => setMatchError(err.message)
+      (err: any) => {
+        if (err?.code === 'unavailable' || err?.message?.includes('unavailable') || err?.message?.includes('offline')) {
+          setConnectionStatus('reconnecting');
+        } else if (err?.code === 'permission-denied' || err?.code === 'not-found' || err?.message?.includes('insufficient permissions')) {
+          console.warn('Active match session is no longer accessible or has ended:', activeMatchId);
+          try {
+            localStorage.removeItem('bigmomma_active_match_id');
+          } catch {
+            // Ignore storage error
+          }
+          setActiveMatchId(null);
+          setMatch(null);
+          setMatchError(null);
+        } else {
+          setMatchError(err.message);
+        }
+      }
     );
 
     const unsubPlayers = matchSyncService.subscribeToPlayers(
@@ -236,11 +385,25 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       (err) => console.warn('Auctions sync notice:', err.message)
     );
 
+    const unsubPendingChoice = matchSyncService.subscribeToPendingChoice(
+      activeMatchId,
+      (data) => setPendingMarketChoice(data),
+      (err) => console.warn('Pending choice sync notice:', err.message)
+    );
+
+    const unsubActiveMarketEvent = matchSyncService.subscribeToActiveMarketEvent(
+      activeMatchId,
+      (data) => setActiveMarketEvent(data),
+      (err) => console.warn('Active market event sync notice:', err.message)
+    );
+
     return () => {
       unsubMatch();
       unsubPlayers();
       unsubLogs();
       unsubAuctions();
+      unsubPendingChoice();
+      unsubActiveMarketEvent();
     };
   }, [activeMatchId, isAuthenticated]);
 
@@ -273,6 +436,128 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => unsubscribe();
   }, [activeGameId]);
+
+  // Start Quick-Match Queue (automatically finds open public lobby or creates one)
+  const startQuickMatchQueue = useCallback(async (): Promise<string> => {
+    if (!isAuthenticated) {
+      const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to join matchmaking.';
+      setMatchError(errorMsg);
+      const err = new Error(errorMsg);
+      (err as any).code = 'AUTH_REQUIRED';
+      throw err;
+    }
+    setMatchError(null);
+    setMatchmakingQueueState('searching');
+    setQueueTimeSeconds(0);
+
+    try {
+      // Simulate quick queue handshake for smooth user feedback
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
+      const reqId = `qm_${Date.now()}`;
+      const res = await cloudFunctionsClient.findOrCreateQuickMatch(reqId);
+      setMatchmakingQueueState('matched');
+
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      setMatchmakingQueueState('joining');
+
+      const matchId = res.data?.matchId;
+      if (!matchId) throw new Error('Failed to resolve matchmaking room.');
+
+      setActiveMatchId(matchId);
+      setMatchmakingQueueState('idle');
+      return matchId;
+    } catch (err) {
+      setMatchmakingQueueState('idle');
+      const msg = formatUserFacingMatchError(err);
+      setMatchError(msg);
+      throw err;
+    }
+  }, [isAuthenticated]);
+
+  const cancelQuickMatchQueue = useCallback(() => {
+    setMatchmakingQueueState('idle');
+    setQueueTimeSeconds(0);
+  }, []);
+
+  const fillRemainingWithBots = useCallback(async (): Promise<void> => {
+    if (!activeMatchId) return;
+    setIsActionPending(true);
+    try {
+      const currentCount = players.length;
+      const needed = Math.max(0, 4 - currentCount);
+      const botProfiles = PRESET_BOT_PROFILES;
+      for (let i = 0; i < needed; i++) {
+        const botName = botProfiles[(currentCount + i) % botProfiles.length].displayName;
+        await cloudFunctionsClient.addBotPlayer(activeMatchId, `fill_bot_${Date.now()}_${i}`, botName);
+      }
+    } catch (err) {
+      console.warn('Fill remaining bots notice:', err);
+    } finally {
+      setIsActionPending(false);
+    }
+  }, [activeMatchId, players.length]);
+
+  const joinByRoomCode = useCallback(
+    async (code: string): Promise<void> => {
+      if (!isAuthenticated) {
+        const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to join a room.';
+        setMatchError(errorMsg);
+        const err = new Error(errorMsg);
+        (err as any).code = 'AUTH_REQUIRED';
+        throw err;
+      }
+      setIsActionPending(true);
+      setMatchError(null);
+      try {
+        const reqId = `join_code_${Date.now()}`;
+        const res = await cloudFunctionsClient.joinMatchByAccessCode(code, reqId);
+        const matchId = res.data?.matchId;
+        if (!matchId) throw new Error(`No lobby found for code "${code}".`);
+        setActiveMatchId(matchId);
+      } catch (err) {
+        const msg = formatUserFacingMatchError(err);
+        setMatchError(msg);
+        throw err;
+      } finally {
+        setIsActionPending(false);
+      }
+    },
+    [isAuthenticated]
+  );
+
+  const createPrivateMatch = useCallback(async (): Promise<string> => {
+    if (!isAuthenticated) {
+      const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to host a room.';
+      setMatchError(errorMsg);
+      const err = new Error(errorMsg);
+      (err as any).code = 'AUTH_REQUIRED';
+      throw err;
+    }
+    setIsActionPending(true);
+    setMatchError(null);
+    try {
+      const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const reqId = `create_priv_${Date.now()}`;
+      const accessCode = `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      await cloudFunctionsClient.createMatch(
+        newMatchId,
+        reqId,
+        'default-standard-board',
+        '1.0.0',
+        true,
+        accessCode
+      );
+      setActiveMatchId(newMatchId);
+      return newMatchId;
+    } catch (err) {
+      const msg = formatUserFacingMatchError(err);
+      setMatchError(msg);
+      throw err;
+    } finally {
+      setIsActionPending(false);
+    }
+  }, [isAuthenticated]);
 
   // Create Match
   const createMatch = useCallback(
@@ -479,7 +764,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [activeMatchId, isAuthenticated]);
 
   // Request Roll
-  const requestRoll = useCallback(async (): Promise<{ roll: number; newSpace: number }> => {
+  const requestRoll = useCallback(async (predeterminedRoll?: number): Promise<{ roll: number; newSpace: number }> => {
     if (!activeMatchId) throw new Error('No active match');
     if (!isAuthenticated) {
       const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to roll dice.';
@@ -491,7 +776,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsActionPending(true);
     try {
       const reqId = `roll_${Date.now()}`;
-      const res = await cloudFunctionsClient.requestRoll(activeMatchId, reqId, match?.stateVersion);
+      const res = await cloudFunctionsClient.requestRoll(activeMatchId, reqId, match?.stateVersion, predeterminedRoll);
       return res.data || { roll: 1, newSpace: 0 };
     } catch (err) {
       const msg = formatUserFacingMatchError(err);
@@ -675,6 +960,78 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [activeMatchId, match?.stateVersion, isAuthenticated]
   );
 
+  // Mortgage Property
+  const mortgageProperty = useCallback(
+    async (spaceId: string): Promise<void> => {
+      if (!activeMatchId) return;
+      if (!isAuthenticated) {
+        const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to mortgage assets.';
+        setMatchError(errorMsg);
+        return;
+      }
+      setIsActionPending(true);
+      try {
+        const reqId = `mtg_${Date.now()}`;
+        await cloudFunctionsClient.mortgageProperty(activeMatchId, reqId, spaceId, match?.stateVersion);
+      } catch (err) {
+        const msg = formatUserFacingMatchError(err);
+        setMatchError(msg);
+        throw err;
+      } finally {
+        setIsActionPending(false);
+      }
+    },
+    [activeMatchId, match?.stateVersion, isAuthenticated]
+  );
+
+  // Unmortgage Property
+  const unmortgageProperty = useCallback(
+    async (spaceId: string): Promise<void> => {
+      if (!activeMatchId) return;
+      if (!isAuthenticated) {
+        const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to redeem mortgages.';
+        setMatchError(errorMsg);
+        return;
+      }
+      setIsActionPending(true);
+      try {
+        const reqId = `unmtg_${Date.now()}`;
+        await cloudFunctionsClient.unmortgageProperty(activeMatchId, reqId, spaceId, match?.stateVersion);
+      } catch (err) {
+        const msg = formatUserFacingMatchError(err);
+        setMatchError(msg);
+        throw err;
+      } finally {
+        setIsActionPending(false);
+      }
+    },
+    [activeMatchId, match?.stateVersion, isAuthenticated]
+  );
+
+  // Liquidate Property / Sell Share to Bank
+  const liquidateProperty = useCallback(
+    async (spaceId: string): Promise<void> => {
+      if (!activeMatchId) return;
+      if (!isAuthenticated) {
+        const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to liquidate assets.';
+        setMatchError(errorMsg);
+        return;
+      }
+      setIsActionPending(true);
+      try {
+        const reqId = `liq_${Date.now()}`;
+        await cloudFunctionsClient.liquidateProperty(activeMatchId, reqId, spaceId, match?.stateVersion);
+      } catch (err) {
+        const msg = formatUserFacingMatchError(err);
+        setMatchError(msg);
+        throw err;
+      } finally {
+        setIsActionPending(false);
+      }
+    },
+    [activeMatchId, match?.stateVersion, isAuthenticated]
+  );
+
   // Complete Turn
   const completeTurn = useCallback(async (): Promise<void> => {
     if (!activeMatchId) return;
@@ -733,10 +1090,26 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         players,
         logs,
         activeAuction,
+        pendingMarketChoice,
+        activeMarketEvent,
         openMatches,
         matchError,
         isActionPending,
         clearMatchError,
+        // Network Resilience & Reconnection
+        connectionStatus,
+        isOnline,
+        lastReconnectedAt,
+        reconnectHandshake,
+        // Matchmaking Quick-Match Queue
+        matchmakingQueueState,
+        queueTimeSeconds,
+        startQuickMatchQueue,
+        cancelQuickMatchQueue,
+        fillRemainingWithBots,
+        joinByRoomCode,
+        createPrivateMatch,
+        // Match control actions
         setActiveMatchId,
         createMatch,
         createSoloBotMatch,
@@ -755,6 +1128,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         resolveAuction,
         executeSPAction,
         submitMarketChoice,
+        mortgageProperty,
+        unmortgageProperty,
+        liquidateProperty,
         completeTurn,
         // Legacy fields
         activeGameId,

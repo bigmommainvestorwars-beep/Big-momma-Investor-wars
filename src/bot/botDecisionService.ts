@@ -130,6 +130,15 @@ export class BotDecisionService {
       return legalActions;
     }
 
+    // Phase: AWAITING_MARKET_CHOICE
+    if (match.currentPhase === 'AWAITING_MARKET_CHOICE') {
+      legalActions.push({
+        actionType: 'SUBMIT_MARKET_CHOICE',
+        description: 'Ratify boardroom market directive.',
+      });
+      return legalActions;
+    }
+
     // Phase: TURN_END or default
     legalActions.push({
       actionType: 'COMPLETE_TURN',
@@ -168,6 +177,19 @@ export class BotDecisionService {
 
     if (match.currentPhase === 'AUCTION_IN_PROGRESS') {
       decision = strategy.evaluateAuctionAction(context);
+    } else if (match.currentPhase === 'AWAITING_MARKET_CHOICE') {
+      // Choose option based on profile risk tolerance
+      const isAggressive = profile.personality === 'aggressive' || profile.riskTolerance > 0.6;
+      decision = {
+        actionType: 'SUBMIT_MARKET_CHOICE',
+        confidence: 0.9,
+        rationale: isAggressive
+          ? 'Selected aggressive capital allocation directive to maximize upside.'
+          : 'Selected conservative reserve directive to protect working capital.',
+        payload: {
+          choiceIndex: isAggressive ? 0 : 1,
+        },
+      };
     } else {
       decision = strategy.evaluateTurnAction(context);
     }

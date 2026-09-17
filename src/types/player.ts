@@ -13,6 +13,7 @@ export interface PlayerInventory {
   cash: number;
   specialPoints: number; // SP balance
   ownedSpaceIds: string[];
+  mortgagedSpaceIds?: string[];
   companyShareIds: string[];
   modifierIds: string[];
 }

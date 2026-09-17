@@ -24,3 +24,32 @@ export interface MarketEvent {
   activatedAtTurn: number;
   active: boolean;
 }
+
+export interface MarketChoiceModifier {
+  type: 'sector_boost' | 'market_shield' | 'dividend_surge' | 'rate_discount' | 'patent_freeze';
+  sector?: string;
+  rentMultiplier?: number;
+  durationRounds: number;
+}
+
+export interface MarketChoiceOption {
+  id: string;
+  label: string;
+  description: string;
+  effectSummary: string;
+  cashDelta?: number; // ƁM delta
+  spDelta?: number;   // SP delta
+  modifier?: MarketChoiceModifier;
+}
+
+export interface PendingMarketChoiceDoc {
+  id: string;
+  eventId: string;
+  playerId: string;
+  spaceIndex: number;
+  title: string;
+  subtitle: string;
+  lore: string;
+  options: MarketChoiceOption[];
+  expiresAt: number;
+}

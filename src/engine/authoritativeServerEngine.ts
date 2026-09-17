@@ -12,16 +12,54 @@ import {
   FirestoreLogDoc,
   matchSyncService,
 } from '../services/firebase/matchSyncService';
+import { getFirebaseFirestore } from '../services/firebase/config';
+import {
+  doc,
+  setDoc,
+  getDoc,
+  getDocs,
+  collection,
+  query,
+  where,
+  limit,
+} from 'firebase/firestore';
 import { DEFAULT_STANDARD_SPACES } from '../config/boardConfig';
 import { BoardSpace } from '../types/board';
 import { BotDecisionService } from '../bot/botDecisionService';
 import { ServerFunctionError, SERVER_ERROR_CODES } from '../../functions/src/types/contracts';
+import { MarketEvent, PendingMarketChoiceDoc, MarketChoiceOption } from '../types/marketEvent';
+import {
+  MARKET_CHOICE_TEMPLATES,
+  getRandomMarketChoiceTemplate,
+  DEFAULT_MARKET_EVENTS,
+  MarketEventDefinition,
+} from '../config/marketEventConfig';
+
+export interface ActiveMatchModifier {
+  id: string;
+  type:
+    | 'regulatory_shield'
+    | 'patent_freeze'
+    | 'market_intelligence'
+    | 'sector_boost'
+    | 'market_shield'
+    | 'dividend_surge'
+    | 'rate_discount';
+  targetPlayerId?: string;
+  targetSpaceId?: string;
+  sector?: string;
+  rentMultiplier?: number;
+  roundsRemaining: number;
+}
 
 export interface AuthoritativeMatchContainer {
   match: FirestoreMatchDoc;
   players: Map<string, FirestorePlayerDoc>;
   logs: FirestoreLogDoc[];
   activeAuction: FirestoreAuctionDoc | null;
+  activeModifiers?: ActiveMatchModifier[];
+  activeMarketEvent?: MarketEvent | null;
+  pendingMarketChoice?: PendingMarketChoiceDoc | null;
 }
 
 export class AuthoritativeServerEngine {
@@ -39,15 +77,108 @@ export class AuthoritativeServerEngine {
         players: playersList,
         logs: container.logs,
         activeAuction: container.activeAuction,
+        pendingChoice: container.pendingMarketChoice,
+        activeMarketEvent: container.activeMarketEvent,
       };
     });
     matchSyncService.registerLocalOpenMatchesProvider(() => this.getOpenMatches());
+    matchSyncService.registerRemoteSyncHandler((type, matchId, data) => {
+      if (type === 'match') {
+        this.syncFromRemoteMatch(data);
+      } else if (type === 'players') {
+        this.syncFromRemotePlayers(matchId, data);
+      }
+    });
+  }
+
+  public syncFromRemoteMatch(remoteMatch: FirestoreMatchDoc): void {
+    let container = this.matches.get(remoteMatch.id);
+    if (!container) {
+      container = {
+        match: remoteMatch,
+        players: new Map(),
+        logs: [],
+        activeAuction: null,
+        activeModifiers: [],
+      };
+      this.matches.set(remoteMatch.id, container);
+    } else {
+      if (remoteMatch.stateVersion >= container.match.stateVersion) {
+        container.match = { ...container.match, ...remoteMatch };
+      }
+    }
+  }
+
+  public syncFromRemotePlayers(matchId: string, remotePlayers: FirestorePlayerDoc[]): void {
+    let container = this.matches.get(matchId);
+    if (!container) {
+      container = {
+        match: {
+          id: matchId,
+          hostUserId: remotePlayers[0]?.userId || '',
+          boardId: 'default-standard-board',
+          rulesetVersion: '1.0.0',
+          status: 'waiting_for_players',
+          currentPhase: 'TURN_START',
+          currentPlayerId: remotePlayers[0]?.id || null,
+          turnNumber: 1,
+          roundNumber: 1,
+          stateVersion: 1,
+          participantUserIds: remotePlayers.map((p) => p.userId),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        },
+        players: new Map(),
+        logs: [],
+        activeAuction: null,
+      };
+      this.matches.set(matchId, container);
+    }
+    for (const p of remotePlayers) {
+      container.players.set(p.id, { ...p });
+    }
+  }
+
+  private async persistToFirestore(container: AuthoritativeMatchContainer): Promise<void> {
+    const db = getFirebaseFirestore();
+    if (!db) return;
+
+    try {
+      const matchRef = doc(db, 'matches', container.match.id);
+      await setDoc(matchRef, { ...container.match }, { merge: true });
+
+      // Persist players
+      const playerPromises = Array.from(container.players.values()).map((p) => {
+        const pRef = doc(db, 'matches', container.match.id, 'players', p.id);
+        return setDoc(pRef, { ...p }, { merge: true });
+      });
+      await Promise.all(playerPromises);
+
+      // Persist latest log if present
+      if (container.logs.length > 0) {
+        const latestLog = container.logs[0];
+        const lRef = doc(db, 'matches', container.match.id, 'logs', latestLog.id);
+        await setDoc(lRef, { ...latestLog }, { merge: true });
+      }
+
+      // Persist active auction if present
+      if (container.activeAuction) {
+        const aRef = doc(db, 'matches', container.match.id, 'auctions', container.activeAuction.id);
+        await setDoc(aRef, { ...container.activeAuction }, { merge: true });
+      }
+    } catch (err) {
+      console.warn('Firestore match persist notice:', err);
+    }
   }
 
   public getOpenMatches(): FirestoreMatchDoc[] {
     const list: FirestoreMatchDoc[] = [];
     for (const container of this.matches.values()) {
-      if (container.match.status === 'waiting_for_players') {
+      if (
+        container.match.status === 'waiting_for_players' &&
+        !container.match.isPrivate &&
+        container.players.size < 4
+      ) {
         list.push({ ...container.match });
       }
     }
@@ -90,8 +221,15 @@ export class AuthoritativeServerEngine {
       container.match,
       playersList,
       container.logs,
-      container.activeAuction
+      container.activeAuction,
+      container.pendingMarketChoice,
+      container.activeMarketEvent
     );
+
+    // Asynchronously persist state to Firestore for remote multiplayer sync
+    this.persistToFirestore(container).catch((err) => {
+      console.warn('Firestore match persist notice:', err);
+    });
   }
 
   private assertMatchActive(match: FirestoreMatchDoc): void {
@@ -145,13 +283,18 @@ export class AuthoritativeServerEngine {
     boardId: string = 'default-standard-board',
     rulesetVersion: string = '1.0.0',
     hostUserId: string = 'host_user_1',
-    hostDisplayName: string = 'Investor (Host)'
+    hostDisplayName: string = 'Investor (Host)',
+    isPrivate: boolean = false,
+    accessCode?: string
   ): FirestoreMatchDoc {
     if (this.processedRequests.has(requestId)) {
       const existing = this.matches.get(matchId);
       if (existing) return existing.match;
     }
     this.processedRequests.add(requestId);
+
+    const generatedCode =
+      accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     const match: FirestoreMatchDoc = {
       id: matchId,
@@ -165,6 +308,8 @@ export class AuthoritativeServerEngine {
       roundNumber: 0,
       stateVersion: 1,
       participantUserIds: [hostUserId],
+      isPrivate,
+      accessCode: generatedCode,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -180,6 +325,7 @@ export class AuthoritativeServerEngine {
       cash: 1500,
       specialPoints: 50,
       ownedSpaceIds: [],
+      mortgagedSpaceIds: [],
       companyShareIds: [],
       modifierIds: [],
       isBot: false,
@@ -195,6 +341,7 @@ export class AuthoritativeServerEngine {
       players,
       logs: [],
       activeAuction: null,
+      activeModifiers: [],
     };
 
     this.matches.set(matchId, container);
@@ -243,6 +390,7 @@ export class AuthoritativeServerEngine {
       cash: 1500,
       specialPoints: 50,
       ownedSpaceIds: [],
+      mortgagedSpaceIds: [],
       companyShareIds: [],
       modifierIds: [],
       isBot: true,
@@ -306,7 +454,14 @@ export class AuthoritativeServerEngine {
       throw new ServerFunctionError(SERVER_ERROR_CODES.ACTION_LIMIT_REACHED, 'Match lobby is full (max 4 players).');
     }
     if (container.players.has(userId)) {
-      return container.players.get(userId)!;
+      const existing = container.players.get(userId)!;
+      existing.connected = true;
+      existing.lastActiveAt = Date.now();
+      if (existing.status === 'disconnected') {
+        existing.status = 'active';
+      }
+      this.emitStateChange(container);
+      return existing;
     }
     const newPlayer: FirestorePlayerDoc = {
       id: userId,
@@ -319,6 +474,7 @@ export class AuthoritativeServerEngine {
       cash: 1500,
       specialPoints: 50,
       ownedSpaceIds: [],
+      mortgagedSpaceIds: [],
       companyShareIds: [],
       modifierIds: [],
       isBot: false,
@@ -357,6 +513,232 @@ export class AuthoritativeServerEngine {
   }
 
   /**
+   * 3d. reconnectPlayer (Resilience handshake when switching network interfaces on mobile)
+   */
+  public reconnectPlayer(
+    matchId: string,
+    requestId: string,
+    userId: string
+  ): { success: boolean; stateVersion: number; player: FirestorePlayerDoc } {
+    const container = this.matches.get(matchId);
+    if (!container) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match session not found for reconnection.');
+    }
+    const player = container.players.get(userId);
+    if (!player) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.TARGET_NOT_FOUND, 'Player not found in active match session.');
+    }
+    player.connected = true;
+    if (player.status === 'disconnected') {
+      player.status = 'active';
+    }
+    player.lastActiveAt = Date.now();
+    this.incrementVersion(container.match);
+    this.appendLog(container, 'PLAYER_RECONNECTED', `${player.displayName} reconnected via handshake.`, userId);
+    this.emitStateChange(container);
+    return {
+      success: true,
+      stateVersion: container.match.stateVersion,
+      player: { ...player },
+    };
+  }
+
+  /**
+   * 3e. markPlayerDisconnected (Temporary network drop or interface switch)
+   */
+  public markPlayerDisconnected(matchId: string, userId: string): void {
+    const container = this.matches.get(matchId);
+    if (!container) return;
+    const player = container.players.get(userId);
+    if (!player) return;
+    player.connected = false;
+    if (player.status === 'active') {
+      player.status = 'disconnected';
+    }
+    player.lastActiveAt = Date.now();
+    this.incrementVersion(container.match);
+    this.appendLog(container, 'PLAYER_DISCONNECTED', `${player.displayName} temporarily disconnected.`, userId);
+    this.emitStateChange(container);
+  }
+
+  /**
+   * 3f. findOrCreateQuickMatch
+   * Resolves quick-match queue by joining the first open public lobby or creating a new one.
+   */
+  public async findOrCreateQuickMatch(
+    requestId: string,
+    userId: string,
+    displayName: string,
+    options?: { isPrivate?: boolean; accessCode?: string }
+  ): Promise<{ matchId: string; isNew: boolean; accessCode: string; player: FirestorePlayerDoc }> {
+    // 1. Check for open public lobby in memory if not private
+    if (!options?.isPrivate) {
+      for (const [id, container] of this.matches.entries()) {
+        if (
+          container.match.status === 'waiting_for_players' &&
+          !container.match.isPrivate &&
+          container.players.size < 4
+        ) {
+          const player = this.joinMatch(id, requestId, userId, displayName);
+          return {
+            matchId: id,
+            isNew: false,
+            accessCode: container.match.accessCode || id.slice(-6).toUpperCase(),
+            player,
+          };
+        }
+      }
+
+      // Check Firestore for open public lobby
+      const db = getFirebaseFirestore();
+      if (db) {
+        try {
+          const matchesRef = collection(db, 'matches');
+          const q = query(
+            matchesRef,
+            where('status', '==', 'waiting_for_players'),
+            where('isPrivate', '==', false),
+            limit(5)
+          );
+          const snap = await getDocs(q);
+
+          for (const docSnap of snap.docs) {
+            const matchData = { id: docSnap.id, ...docSnap.data() } as FirestoreMatchDoc;
+            if (matchData.participantUserIds.length < 4 && matchData.hostUserId !== userId) {
+              const playersRef = collection(db, 'matches', matchData.id, 'players');
+              const playersSnap = await getDocs(playersRef);
+              const playersMap = new Map<string, FirestorePlayerDoc>();
+
+              for (const pDoc of playersSnap.docs) {
+                playersMap.set(pDoc.id, { id: pDoc.id, ...pDoc.data() } as FirestorePlayerDoc);
+              }
+
+              const container: AuthoritativeMatchContainer = {
+                match: matchData,
+                players: playersMap,
+                logs: [],
+                activeAuction: null,
+                activeModifiers: [],
+              };
+              this.matches.set(matchData.id, container);
+
+              const player = this.joinMatch(matchData.id, requestId, userId, displayName);
+              return {
+                matchId: matchData.id,
+                isNew: false,
+                accessCode: matchData.accessCode || matchData.id.slice(-6).toUpperCase(),
+                player,
+              };
+            }
+          }
+        } catch (err) {
+          console.warn('Firestore quick-match query notice:', err);
+        }
+      }
+    }
+
+    // 2. Create new match lobby
+    const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const accessCode =
+      options?.accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    this.createMatch(
+      newMatchId,
+      requestId,
+      'default-standard-board',
+      '1.0.0',
+      userId,
+      displayName,
+      options?.isPrivate ?? false,
+      accessCode
+    );
+
+    const container = this.matches.get(newMatchId)!;
+    const player = container.players.get(userId)!;
+    return {
+      matchId: newMatchId,
+      isNew: true,
+      accessCode,
+      player,
+    };
+  }
+
+  /**
+   * 3g. joinMatchByAccessCode
+   * Allows joining private or public lobbies via 6-character access code or match ID.
+   */
+  public async joinMatchByAccessCode(
+    accessCode: string,
+    requestId: string,
+    userId: string,
+    displayName: string
+  ): Promise<{ matchId: string; player: FirestorePlayerDoc }> {
+    const cleanCode = accessCode.trim().toUpperCase();
+
+    // 1. Check local in-memory matches
+    for (const [id, container] of this.matches.entries()) {
+      const matchCode = (container.match.accessCode || '').toUpperCase();
+      const matchIdClean = id.toUpperCase();
+      if (
+        (matchCode === cleanCode || matchIdClean === cleanCode) &&
+        container.match.status === 'waiting_for_players'
+      ) {
+        const player = this.joinMatch(id, requestId, userId, displayName);
+        return { matchId: id, player };
+      }
+    }
+
+    // 2. Query Firestore for open lobby with this accessCode or match ID
+    const db = getFirebaseFirestore();
+    if (db) {
+      try {
+        const matchesRef = collection(db, 'matches');
+        const q = query(matchesRef, where('accessCode', '==', cleanCode), limit(1));
+        const snap = await getDocs(q);
+
+        let matchDocSnap = snap.docs[0];
+        if (!matchDocSnap) {
+          const directDoc = await getDoc(doc(db, 'matches', accessCode.trim()));
+          if (directDoc.exists()) {
+            matchDocSnap = directDoc;
+          }
+        }
+
+        if (matchDocSnap && matchDocSnap.exists()) {
+          const matchData = { id: matchDocSnap.id, ...matchDocSnap.data() } as FirestoreMatchDoc;
+          if (matchData.status === 'waiting_for_players') {
+            const playersRef = collection(db, 'matches', matchData.id, 'players');
+            const playersSnap = await getDocs(playersRef);
+            const playersMap = new Map<string, FirestorePlayerDoc>();
+
+            for (const pDoc of playersSnap.docs) {
+              playersMap.set(pDoc.id, { id: pDoc.id, ...pDoc.data() } as FirestorePlayerDoc);
+            }
+
+            const container: AuthoritativeMatchContainer = {
+              match: matchData,
+              players: playersMap,
+              logs: [],
+              activeAuction: null,
+              activeModifiers: [],
+            };
+            this.matches.set(matchData.id, container);
+
+            const player = this.joinMatch(matchData.id, requestId, userId, displayName);
+            return { matchId: matchData.id, player };
+          }
+        }
+      } catch (err) {
+        console.warn('Firestore room code lookup notice:', err);
+      }
+    }
+
+    throw new ServerFunctionError(
+      SERVER_ERROR_CODES.MATCH_NOT_FOUND,
+      `No open lobby found for match code "${accessCode}".`
+    );
+  }
+
+  /**
    * 4. startMatch
    */
   public startMatch(matchId: string, requestId: string): FirestoreMatchDoc {
@@ -391,7 +773,8 @@ export class AuthoritativeServerEngine {
     matchId: string,
     requestId: string,
     callingPlayerId: string,
-    expectedStateVersion?: number
+    expectedStateVersion?: number,
+    predeterminedRoll?: number
   ): { roll: number; newSpace: number; stateVersion: number } {
     const container = this.matches.get(matchId);
     if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
@@ -412,8 +795,11 @@ export class AuthoritativeServerEngine {
       throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_ELIMINATED, 'Player is not active.');
     }
 
-    // Authoritative Server RNG roll: 1-6
-    const roll = Math.floor(Math.random() * 6) + 1;
+    // Roll: use client predetermined roll if valid 2-12, otherwise generate random 2-12 (sum of two D6)
+    const roll =
+      typeof predeterminedRoll === 'number' && predeterminedRoll >= 2 && predeterminedRoll <= 12
+        ? Math.floor(predeterminedRoll)
+        : (Math.floor(Math.random() * 6) + 1) + (Math.floor(Math.random() * 6) + 1);
     const totalSpaces = DEFAULT_STANDARD_SPACES.length;
     const oldSpace = player.currentSpaceIndex;
     const passedGo = oldSpace + roll >= totalSpaces;
@@ -446,33 +832,97 @@ export class AuthoritativeServerEngine {
         nextPhase = 'AWAITING_ACTION';
         actionMessage += ` Available for investment (${targetSpace.baseCost} ƁM).`;
       } else if (owner.id !== player.id) {
-        const rent = targetSpace.rentTiers?.[0] || 25;
-        const actualRent = Math.min(player.cash, rent);
-        player.cash -= actualRent;
-        player.netWorth = Math.max(0, player.netWorth - actualRent);
+        // Check if property is frozen by Patent Injunction OR mortgaged to bank
+        const isFrozen = container.activeModifiers?.some(
+          (m) => m.type === 'patent_freeze' && m.targetSpaceId === targetSpace.id && m.roundsRemaining > 0
+        );
+        const isMortgaged = owner.mortgagedSpaceIds?.includes(targetSpace.id);
 
-        owner.cash += actualRent;
-        owner.netWorth += actualRent;
-        actionMessage += ` Paid ${actualRent} ƁM rent to ${owner.displayName}.`;
+        if (isFrozen) {
+          actionMessage += ` Rent suspended! ${targetSpace.name} is currently frozen by Patent Injunction.`;
+        } else if (isMortgaged) {
+          actionMessage += ` Rent suspended! ${targetSpace.name} is pledged to the bank under mortgage.`;
+        } else {
+          // 1. Check if owner has syndicate intelligence active (yield bonus)
+          const ownerHasIntel = container.activeModifiers?.some(
+            (m) => m.type === 'market_intelligence' && m.targetPlayerId === owner.id && m.roundsRemaining > 0
+          );
+          let rent = targetSpace.rentTiers?.[0] || 25;
+          if (ownerHasIntel) {
+            rent = Math.round(rent * 1.5);
+          }
 
-        // Check player bankruptcy
-        if (player.cash <= 0 && player.ownedSpaceIds.length === 0) {
-          player.status = 'bankrupt';
-          actionMessage += ` ${player.displayName} declared BANKRUPTCY!`;
+          // 2. Check Sector Boost modifier from Market Event Choice
+          const sectorBoost = container.activeModifiers?.find(
+            (m) =>
+              m.type === 'sector_boost' &&
+              (!m.targetPlayerId || m.targetPlayerId === owner.id) &&
+              (!m.sector || m.sector === targetSpace.group) &&
+              m.roundsRemaining > 0
+          );
+          if (sectorBoost && sectorBoost.rentMultiplier) {
+            rent = Math.round(rent * sectorBoost.rentMultiplier);
+          }
+
+          // 3. Check Global Market Event active on match (e.g. BULL_MARKET, TECH_BOOM)
+          if (container.activeMarketEvent && container.activeMarketEvent.active) {
+            const impact = container.activeMarketEvent.impact;
+            if (impact.rentMultiplier) {
+              if (impact.affectedTarget === 'all' || impact.affectedTarget === targetSpace.group) {
+                rent = Math.round(rent * impact.rentMultiplier);
+              }
+            }
+          }
+
+          // 4. Check if landing player has Market Shield covenant
+          const playerHasShield = container.activeModifiers?.some(
+            (m) => m.type === 'market_shield' && m.targetPlayerId === player.id && m.roundsRemaining > 0
+          );
+
+          if (playerHasShield) {
+            actionMessage += ` Institutional Harbor Shield absorbed rent liability! Avoided ${rent} ƁM payment to ${owner.displayName}.`;
+          } else {
+            const actualRent = Math.min(player.cash, rent);
+            player.cash -= actualRent;
+            player.netWorth = Math.max(0, player.netWorth - actualRent);
+
+            owner.cash += actualRent;
+            owner.netWorth += actualRent;
+            const modifierNotice = ownerHasIntel || sectorBoost ? ' (boosted by active market modifiers)' : '';
+            actionMessage += ` Paid ${actualRent} ƁM rent to ${owner.displayName}${modifierNotice}.`;
+
+            // Check player bankruptcy
+            if (player.cash <= 0 && player.ownedSpaceIds.length === 0) {
+              player.status = 'bankrupt';
+              actionMessage += ` ${player.displayName} declared BANKRUPTCY!`;
+            }
+          }
         }
       }
     } else if (targetSpace.type === 'sp_station') {
       player.specialPoints += 25;
       actionMessage += ` Gained +25 Strategy Points!`;
     } else if (targetSpace.type === 'penalty') {
-      const fee = targetSpace.baseCost || 150;
-      const actualFee = Math.min(player.cash, fee);
-      player.cash -= actualFee;
-      player.netWorth = Math.max(0, player.netWorth - actualFee);
-      actionMessage += ` Incurred ${actualFee} ƁM regulatory penalty.`;
-      if (player.cash <= 0 && player.ownedSpaceIds.length === 0) {
-        player.status = 'bankrupt';
-        actionMessage += ` ${player.displayName} declared BANKRUPTCY!`;
+      // Check Regulatory Harbor Shield or Market Shield
+      const shieldIndex = container.activeModifiers?.findIndex(
+        (m) =>
+          (m.type === 'regulatory_shield' || m.type === 'market_shield') &&
+          m.targetPlayerId === player.id &&
+          m.roundsRemaining > 0
+      ) ?? -1;
+
+      if (shieldIndex !== -1) {
+        actionMessage += ` Regulatory Harbor Shield deployed! Avoided regulatory penalty fees.`;
+      } else {
+        const fee = targetSpace.baseCost || 150;
+        const actualFee = Math.min(player.cash, fee);
+        player.cash -= actualFee;
+        player.netWorth = Math.max(0, player.netWorth - actualFee);
+        actionMessage += ` Incurred ${actualFee} ƁM regulatory penalty.`;
+        if (player.cash <= 0 && player.ownedSpaceIds.length === 0) {
+          player.status = 'bankrupt';
+          actionMessage += ` ${player.displayName} declared BANKRUPTCY!`;
+        }
       }
     } else if (targetSpace.type === 'auction') {
       // Immediate auction trigger
@@ -490,11 +940,51 @@ export class AuthoritativeServerEngine {
       };
       actionMessage += ` Triggered a high-frequency auction!`;
     } else if (targetSpace.type === 'market_event') {
-      // Market event bonus dividend
-      const grant = 100;
-      player.cash += grant;
-      player.netWorth += grant;
-      actionMessage += ` Triggered Market Event: Angel Syndicate dividend! Received ${grant} ƁM.`;
+      const template = getRandomMarketChoiceTemplate();
+      if (player.isBot) {
+        // Bot auto-evaluates directive based on personality/risk
+        const profile = BotDecisionService.getBotProfile(player);
+        const chosenOption =
+          profile.personality === 'aggressive' || profile.riskTolerance > 0.6
+            ? template.options[0]
+            : template.options[1] || template.options[0];
+
+        if (chosenOption.cashDelta) {
+          player.cash = Math.max(0, player.cash + chosenOption.cashDelta);
+          player.netWorth = Math.max(0, player.netWorth + chosenOption.cashDelta);
+        }
+        if (chosenOption.spDelta) {
+          player.specialPoints = Math.max(0, player.specialPoints + chosenOption.spDelta);
+        }
+        if (chosenOption.modifier) {
+          if (!container.activeModifiers) container.activeModifiers = [];
+          container.activeModifiers.push({
+            id: `mod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            type: chosenOption.modifier.type,
+            targetPlayerId: player.id,
+            sector: chosenOption.modifier.sector,
+            rentMultiplier: chosenOption.modifier.rentMultiplier,
+            roundsRemaining: chosenOption.modifier.durationRounds,
+          });
+        }
+        actionMessage += ` Triggered Market Event: ${template.title}! Enacted directive [${chosenOption.label}] (${chosenOption.effectSummary}).`;
+        nextPhase = 'AWAITING_ACTION';
+      } else {
+        // Human player draws interactive boardroom directive
+        container.pendingMarketChoice = {
+          id: `choice_${Date.now()}`,
+          eventId: template.eventId,
+          playerId: player.id,
+          spaceIndex: targetSpace.index,
+          title: template.title,
+          subtitle: template.subtitle,
+          lore: template.lore,
+          options: template.options,
+          expiresAt: Date.now() + 35000,
+        };
+        nextPhase = 'AWAITING_MARKET_CHOICE';
+        actionMessage += ` Triggered Market Event: ${template.title}! Boardroom strategic directive required.`;
+      }
     }
 
     match.currentPhase = nextPhase;
@@ -809,6 +1299,7 @@ export class AuthoritativeServerEngine {
     const container = this.matches.get(matchId);
     if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
     this.assertMatchActive(container.match);
+    this.assertStateVersion(container.match, expectedVersionToAssert(expectedStateVersion));
 
     const player = container.players.get(callingPlayerId);
     if (!player) throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_NOT_IN_MATCH, 'Player not found.');
@@ -817,16 +1308,143 @@ export class AuthoritativeServerEngine {
       throw new ServerFunctionError(SERVER_ERROR_CODES.INSUFFICIENT_SP, 'Insufficient strategy points.');
     }
 
+    if (!container.activeModifiers) {
+      container.activeModifiers = [];
+    }
+
+    // Deduct SP
     player.specialPoints -= spCost;
-    // SP effect: bonus cash injection
-    player.cash += 75;
-    player.netWorth += 75;
+    let logMessage = '';
+
+    switch (actionId) {
+      case 'strategic_liquidity':
+      case 'sp_liquidity_injection': {
+        player.cash += 75;
+        player.netWorth += 75;
+        logMessage = `${player.displayName} activated Strategic Liquidity Injection for ${spCost} SP. Injected 75 ƁM working capital into treasury.`;
+        break;
+      }
+
+      case 'market_intelligence':
+      case 'sp_market_scan': {
+        container.activeModifiers.push({
+          id: `mod_intel_${Date.now()}`,
+          type: 'market_intelligence',
+          targetPlayerId: player.id,
+          roundsRemaining: 2,
+        });
+        logMessage = `${player.displayName} activated Syndicate Market Intelligence for ${spCost} SP. Yield multiplier boosted across owned assets for 2 rounds.`;
+        break;
+      }
+
+      case 'regulatory_shield':
+      case 'sp_regulatory_shield': {
+        container.activeModifiers.push({
+          id: `mod_shield_${Date.now()}`,
+          type: 'regulatory_shield',
+          targetPlayerId: player.id,
+          roundsRemaining: 3,
+        });
+        logMessage = `${player.displayName} deployed Regulatory Harbor Shield for ${spCost} SP. SEC penalty immunity active.`;
+        break;
+      }
+
+      case 'hostile_takeover':
+      case 'sp_hostile_takeover': {
+        if (!targetPlayerId) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'Target space is required for Hostile Takeover Bid.');
+        }
+        const targetSpaceId = targetPlayerId; // passed as target id
+        const targetSpace = DEFAULT_STANDARD_SPACES.find((s) => s.id === targetSpaceId);
+        if (!targetSpace || (targetSpace.type !== 'property' && targetSpace.type !== 'company')) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'Target must be an acquirable property or company.');
+        }
+
+        const rival = Array.from(container.players.values()).find((p) => p.ownedSpaceIds?.includes(targetSpaceId));
+        if (!rival) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'Property must be owned by a rival.');
+        }
+        if (rival.id === player.id) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'Cannot launch a hostile takeover on your own property.');
+        }
+
+        // 1.5x valuation cash cost
+        const buyoutCost = Math.round((targetSpace.baseCost || 100) * 1.5);
+        if (player.cash < buyoutCost) {
+          // Refund SP if can't afford buyout cost
+          player.specialPoints += spCost;
+          throw new ServerFunctionError(
+            SERVER_ERROR_CODES.INSUFFICIENT_CASH,
+            `Insufficient cash for buyout. Required: ${buyoutCost} ƁM, available: ${player.cash} ƁM.`
+          );
+        }
+
+        player.cash -= buyoutCost;
+        rival.cash += buyoutCost;
+        rival.ownedSpaceIds = rival.ownedSpaceIds.filter((id) => id !== targetSpaceId);
+        player.ownedSpaceIds.push(targetSpaceId);
+        logMessage = `${player.displayName} completed Hostile Takeover Bid on ${targetSpace.name} from ${rival.displayName} for ${buyoutCost} ƁM and ${spCost} SP!`;
+        break;
+      }
+
+      case 'patent_freeze':
+      case 'sp_patent_freeze': {
+        if (!targetPlayerId) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'Target space is required for Patent Injunction Freeze.');
+        }
+        const targetSpaceId = targetPlayerId;
+        const targetSpace = DEFAULT_STANDARD_SPACES.find((s) => s.id === targetSpaceId);
+        if (!targetSpace) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'Target space not found.');
+        }
+
+        container.activeModifiers.push({
+          id: `mod_freeze_${Date.now()}`,
+          type: 'patent_freeze',
+          targetSpaceId,
+          roundsRemaining: 2,
+        });
+        logMessage = `${player.displayName} placed Patent Injunction Freeze on ${targetSpace.name} for ${spCost} SP! Rent collection frozen for 2 rounds.`;
+        break;
+      }
+
+      case 'short_attack':
+      case 'sp_short_attack': {
+        if (!targetPlayerId) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'Target rival player is required for Short Seller Raid.');
+        }
+        const rival = container.players.get(targetPlayerId);
+        if (!rival || rival.id === player.id || rival.status !== 'active') {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'Valid active rival player target required.');
+        }
+
+        const marginCall = 150;
+        const actualDeduction = Math.min(rival.cash, marginCall);
+        rival.cash -= actualDeduction;
+        rival.netWorth = Math.max(0, rival.netWorth - actualDeduction);
+
+        if (rival.cash <= 0 && rival.ownedSpaceIds.length === 0) {
+          rival.status = 'bankrupt';
+        }
+
+        logMessage = `${player.displayName} launched Short Seller Raid on ${rival.displayName} for ${spCost} SP! Rival forced to settle ${actualDeduction} ƁM in emergency margin calls.`;
+        break;
+      }
+
+      default: {
+        // Fallback standard liquidity injection
+        player.cash += 75;
+        player.netWorth += 75;
+        logMessage = `${player.displayName} activated SP Ability (${actionId}) for ${spCost} SP. Received 75 ƁM liquidity.`;
+        break;
+      }
+    }
 
     const newVersion = this.incrementVersion(container.match);
     this.appendLog(
       container,
       'SP_ACTION_EXECUTED',
-      `${player.displayName} activated SP Ability (${actionId}) for ${spCost} SP. Received 75 ƁM liquidity.`,
+      logMessage,
       player.id
     );
     this.emitStateChange(container);
@@ -885,6 +1503,48 @@ export class AuthoritativeServerEngine {
     const nextPlayer = activePlayers[nextIndex];
     match.currentPlayerId = nextPlayer.id;
     match.turnNumber += 1;
+    
+    // If a full round completed, decrement active modifier rounds and advance market cycle
+    if (nextRound > match.roundNumber) {
+      if (container.activeModifiers) {
+        container.activeModifiers = container.activeModifiers
+          .map((m) => ({ ...m, roundsRemaining: m.roundsRemaining - 1 }))
+          .filter((m) => m.roundsRemaining > 0);
+      }
+
+      if (container.activeMarketEvent && container.activeMarketEvent.active) {
+        container.activeMarketEvent.roundsRemaining -= 1;
+        if (container.activeMarketEvent.roundsRemaining <= 0) {
+          container.activeMarketEvent.active = false;
+          this.appendLog(
+            container,
+            'MARKET_CYCLE_NORMALIZED',
+            `Global Market Event [${container.activeMarketEvent.name}] cycle has expired.`
+          );
+        }
+      } else if (nextRound % 3 === 0 && (!container.activeMarketEvent || !container.activeMarketEvent.active)) {
+        // Trigger macro economic trend every 3 rounds
+        const def = DEFAULT_MARKET_EVENTS[Math.floor(Math.random() * DEFAULT_MARKET_EVENTS.length)];
+        container.activeMarketEvent = {
+          id: `ev_${Date.now()}`,
+          name: def.name,
+          code: def.code,
+          description: def.description,
+          scope: def.scope,
+          impact: def.impact,
+          durationRounds: def.defaultDurationRounds,
+          roundsRemaining: def.defaultDurationRounds,
+          activatedAtTurn: match.turnNumber,
+          active: true,
+        };
+        this.appendLog(
+          container,
+          'GLOBAL_MARKET_EVENT',
+          `Macro Economic Shift: [${def.name}] activated for ${def.defaultDurationRounds} rounds! ${def.description}`
+        );
+      }
+    }
+
     match.roundNumber = nextRound;
     match.currentPhase = 'TURN_START';
 
@@ -960,6 +1620,19 @@ export class AuthoritativeServerEngine {
         }
         break;
       }
+      case 'SUBMIT_MARKET_CHOICE': {
+        const eventId =
+          (decision.payload?.eventId as string) ||
+          container.pendingMarketChoice?.eventId ||
+          'choice_venture_debt';
+        const choiceId =
+          (decision.payload?.choiceId as string) ||
+          container.pendingMarketChoice?.options?.[0]?.id ||
+          'opt_equity_grant';
+        this.submitMarketChoice(matchId, requestId, bot.id, eventId, choiceId);
+        actionExecuted = 'SUBMIT_MARKET_CHOICE';
+        break;
+      }
       case 'COMPLETE_TURN':
       case 'PASS_PROPERTY':
       default: {
@@ -990,21 +1663,260 @@ export class AuthoritativeServerEngine {
     const container = this.matches.get(matchId);
     if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
     this.assertMatchActive(container.match);
+    this.assertStateVersion(container.match, expectedVersionToAssert(expectedStateVersion));
+
     const player = container.players.get(callingPlayerId);
     if (!player) throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_NOT_IN_MATCH, 'Player not found.');
 
-    const bonus = 100;
-    player.cash += bonus;
-    player.netWorth += bonus;
+    const pending = container.pendingMarketChoice;
+    let selectedOption: MarketChoiceOption | undefined;
+
+    if (pending && pending.options) {
+      selectedOption = pending.options.find((o) => o.id === choiceId) || pending.options[0];
+    } else {
+      const template = MARKET_CHOICE_TEMPLATES.find((t) => t.eventId === eventId) || MARKET_CHOICE_TEMPLATES[0];
+      selectedOption = template.options.find((o) => o.id === choiceId) || template.options[0];
+    }
+
+    if (!selectedOption) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.ACTION_NOT_AVAILABLE, 'Invalid market directive option.');
+    }
+
+    if (selectedOption.cashDelta) {
+      player.cash = Math.max(0, player.cash + selectedOption.cashDelta);
+      player.netWorth = Math.max(0, player.netWorth + selectedOption.cashDelta);
+    }
+
+    if (selectedOption.spDelta) {
+      player.specialPoints = Math.max(0, player.specialPoints + selectedOption.spDelta);
+    }
+
+    if (selectedOption.modifier) {
+      if (!container.activeModifiers) container.activeModifiers = [];
+      container.activeModifiers.push({
+        id: `mod_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        type: selectedOption.modifier.type,
+        targetPlayerId: player.id,
+        sector: selectedOption.modifier.sector,
+        rentMultiplier: selectedOption.modifier.rentMultiplier,
+        roundsRemaining: selectedOption.modifier.durationRounds,
+      });
+    }
+
+    container.pendingMarketChoice = null;
+
+    if (container.match.currentPhase === 'AWAITING_MARKET_CHOICE') {
+      container.match.currentPhase = 'AWAITING_ACTION';
+    }
+
     const newVersion = this.incrementVersion(container.match);
+    const logSummary = `${player.displayName} enacted Directive [${selectedOption.label}]: ${selectedOption.effectSummary}`;
     this.appendLog(
       container,
       'MARKET_CHOICE_APPLIED',
-      `${player.displayName} resolved Market Event [${eventId}] with choice [${choiceId}] (+ $${bonus}).`,
+      logSummary,
       player.id
     );
     this.emitStateChange(container);
-    return { result: `Choice ${choiceId} resolved with bonus +$${bonus}`, stateVersion: newVersion };
+
+    return {
+      result: `Directive ratified: ${selectedOption.label}`,
+      stateVersion: newVersion,
+    };
+  }
+
+  /**
+   * Manually trigger a macro market event for testing/scenarios
+   */
+  public triggerMacroEvent(matchId: string, eventCode: string): MarketEvent {
+    const container = this.matches.get(matchId);
+    if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
+    const def = DEFAULT_MARKET_EVENTS.find((e) => e.code === eventCode) || DEFAULT_MARKET_EVENTS[0];
+    const event: MarketEvent = {
+      id: `ev_${Date.now()}`,
+      name: def.name,
+      code: def.code,
+      description: def.description,
+      scope: def.scope,
+      impact: def.impact,
+      durationRounds: def.defaultDurationRounds,
+      roundsRemaining: def.defaultDurationRounds,
+      activatedAtTurn: container.match.turnNumber,
+      active: true,
+    };
+    container.activeMarketEvent = event;
+    this.incrementVersion(container.match);
+    this.appendLog(
+      container,
+      'GLOBAL_MARKET_EVENT',
+      `Macro Economic Shift: [${def.name}] activated! ${def.description}`
+    );
+    this.emitStateChange(container);
+    return event;
+  }
+
+  /**
+   * 14. mortgageProperty: Pledges property to the central bank for 50% ƁM value
+   */
+  public mortgageProperty(
+    matchId: string,
+    requestId: string,
+    playerId: string,
+    spaceId: string,
+    expectedStateVersion?: number
+  ): { result: string; cashGained: number; stateVersion: number } {
+    const container = this.matches.get(matchId);
+    if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
+    this.assertStateVersion(container.match, expectedStateVersion);
+
+    const player = container.players.get(playerId);
+    if (!player) throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_NOT_IN_MATCH, 'Player not found.');
+    if (player.status !== 'active') throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_ELIMINATED, 'Player is not active.');
+
+    if (!player.ownedSpaceIds?.includes(spaceId)) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'You do not own this property.');
+    }
+
+    player.mortgagedSpaceIds = player.mortgagedSpaceIds || [];
+    if (player.mortgagedSpaceIds.includes(spaceId)) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.ACTION_NOT_AVAILABLE, 'Property is already mortgaged.');
+    }
+
+    const space = DEFAULT_STANDARD_SPACES.find((s) => s.id === spaceId);
+    if (!space) throw new ServerFunctionError(SERVER_ERROR_CODES.TARGET_NOT_FOUND, 'Space definition not found.');
+
+    const mortgageValue = Math.round((space.baseCost || 100) * 0.5);
+    player.cash += mortgageValue;
+    player.mortgagedSpaceIds.push(spaceId);
+
+    const newVersion = this.incrementVersion(container.match);
+    this.appendLog(
+      container,
+      'PROPERTY_MORTGAGED',
+      `${player.displayName} pledged ${space.name} to the central bank, securing +${mortgageValue} ƁM in debt restructuring liquidity.`,
+      player.id
+    );
+    this.emitStateChange(container);
+
+    return {
+      result: `Successfully mortgaged ${space.name} for +${mortgageValue} ƁM`,
+      cashGained: mortgageValue,
+      stateVersion: newVersion,
+    };
+  }
+
+  /**
+   * 15. unmortgageProperty: Repays the bank (50% principal + 10% interest = 55% base cost) to lift mortgage
+   */
+  public unmortgageProperty(
+    matchId: string,
+    requestId: string,
+    playerId: string,
+    spaceId: string,
+    expectedStateVersion?: number
+  ): { result: string; costPaid: number; stateVersion: number } {
+    const container = this.matches.get(matchId);
+    if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
+    this.assertStateVersion(container.match, expectedStateVersion);
+
+    const player = container.players.get(playerId);
+    if (!player) throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_NOT_IN_MATCH, 'Player not found.');
+    if (player.status !== 'active') throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_ELIMINATED, 'Player is not active.');
+
+    if (!player.ownedSpaceIds?.includes(spaceId)) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'You do not own this property.');
+    }
+
+    player.mortgagedSpaceIds = player.mortgagedSpaceIds || [];
+    if (!player.mortgagedSpaceIds.includes(spaceId)) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.ACTION_NOT_AVAILABLE, 'Property is not mortgaged.');
+    }
+
+    const space = DEFAULT_STANDARD_SPACES.find((s) => s.id === spaceId);
+    if (!space) throw new ServerFunctionError(SERVER_ERROR_CODES.TARGET_NOT_FOUND, 'Space definition not found.');
+
+    const redemptionCost = Math.round((space.baseCost || 100) * 0.55);
+    if (player.cash < redemptionCost) {
+      throw new ServerFunctionError(
+        SERVER_ERROR_CODES.INSUFFICIENT_CASH,
+        `Insufficient cash. Need ${redemptionCost} ƁM to lift mortgage.`
+      );
+    }
+
+    player.cash -= redemptionCost;
+    player.mortgagedSpaceIds = player.mortgagedSpaceIds.filter((id) => id !== spaceId);
+
+    const newVersion = this.incrementVersion(container.match);
+    this.appendLog(
+      container,
+      'MORTGAGE_REDEEMED',
+      `${player.displayName} redeemed mortgage on ${space.name} for ${redemptionCost} ƁM. Rent collection restored.`,
+      player.id
+    );
+    this.emitStateChange(container);
+
+    return {
+      result: `Successfully redeemed mortgage on ${space.name} for ${redemptionCost} ƁM`,
+      costPaid: redemptionCost,
+      stateVersion: newVersion,
+    };
+  }
+
+  /**
+   * 16. liquidateProperty: Permanently liquidates/sells deed to the bank treasury for 50% ƁM value
+   */
+  public liquidateProperty(
+    matchId: string,
+    requestId: string,
+    playerId: string,
+    spaceId: string,
+    expectedStateVersion?: number
+  ): { result: string; cashGained: number; stateVersion: number } {
+    const container = this.matches.get(matchId);
+    if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
+    this.assertStateVersion(container.match, expectedStateVersion);
+
+    const player = container.players.get(playerId);
+    if (!player) throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_NOT_IN_MATCH, 'Player not found.');
+    if (player.status !== 'active') throw new ServerFunctionError(SERVER_ERROR_CODES.PLAYER_ELIMINATED, 'Player is not active.');
+
+    if (!player.ownedSpaceIds?.includes(spaceId)) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TARGET, 'You do not own this property.');
+    }
+
+    const space = DEFAULT_STANDARD_SPACES.find((s) => s.id === spaceId);
+    if (!space) throw new ServerFunctionError(SERVER_ERROR_CODES.TARGET_NOT_FOUND, 'Space definition not found.');
+
+    player.mortgagedSpaceIds = player.mortgagedSpaceIds || [];
+    const isMortgaged = player.mortgagedSpaceIds.includes(spaceId);
+
+    let cashGained = 0;
+    if (!isMortgaged) {
+      cashGained = Math.round((space.baseCost || 100) * 0.5);
+      player.cash += cashGained;
+    }
+
+    player.ownedSpaceIds = player.ownedSpaceIds.filter((id) => id !== spaceId);
+    player.mortgagedSpaceIds = player.mortgagedSpaceIds.filter((id) => id !== spaceId);
+
+    const newVersion = this.incrementVersion(container.match);
+    const logSummary = isMortgaged
+      ? `${player.displayName} foreclosed/surrendered mortgaged deed for ${space.name} to the central bank in debt liquidation.`
+      : `${player.displayName} liquidated ${space.name} deed directly to the central bank treasury for +${cashGained} ƁM.`;
+
+    this.appendLog(
+      container,
+      'PROPERTY_LIQUIDATED',
+      logSummary,
+      player.id
+    );
+    this.emitStateChange(container);
+
+    return {
+      result: `Liquidated ${space.name} to central bank treasury`,
+      cashGained,
+      stateVersion: newVersion,
+    };
   }
 }
 

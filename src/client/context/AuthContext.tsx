@@ -8,6 +8,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, AuthState } from '../../types/auth';
 import { authService } from '../../services/firebase/authService';
 import { setCloudFunctionsLocalTestMode } from '../../services/firebase/cloudFunctionsClient';
+import { AccountStore, type SavedUserAccount } from '../../services/auth/accountStore';
 
 export const DEFAULT_LOCAL_TEST_USER: User = {
   uid: 'local_founder_1',
@@ -19,28 +20,69 @@ export const DEFAULT_LOCAL_TEST_USER: User = {
   lastLoginAt: Date.now(),
 };
 
-interface AuthContextValue extends AuthState {
+export interface AuthContextValue extends AuthState {
   isLocalTestMode: boolean;
   setLocalTestMode: (enabled: boolean) => void;
   switchMockUser: (displayName: string, email?: string) => void;
+  signInWithUsername: (username: string) => Promise<User>;
+  signInAsGuest: (guestName?: string) => Promise<User>;
+  updateUsername: (newUsername: string) => Promise<void>;
   signInWithGoogle: () => Promise<User>;
+  signInWithGooglePreview: (email?: string, name?: string) => Promise<User>;
   signInWithEmail: (email: string, password: string) => Promise<User>;
   signUpWithEmail: (email: string, password: string, displayName?: string) => Promise<User>;
   signInAnonymously: () => Promise<User>;
   signOut: () => Promise<void>;
   isFirebaseConfigured: boolean;
+  savedUsername: string | null;
+  savedAccounts: SavedUserAccount[];
+  currentAccount: SavedUserAccount | null;
+  deleteSavedAccount: (username: string) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+const getInitialUser = (): {
+  user: User | null;
+  savedName: string | null;
+  account: SavedUserAccount | null;
+} => {
+  try {
+    const savedName = localStorage.getItem('bm_username');
+    if (savedName && savedName.trim()) {
+      const account = AccountStore.getAccount(savedName) || AccountStore.loginOrCreateAccount(savedName);
+      return {
+        user: {
+          uid: account.uid,
+          email: account.email,
+          displayName: account.displayName,
+          photoURL: null,
+          emailVerified: true,
+          createdAt: account.createdAt,
+          lastLoginAt: account.lastLoginAt,
+        },
+        savedName: account.displayName,
+        account,
+      };
+    }
+  } catch {}
+  return { user: null, savedName: null, account: null };
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // DEVELOPMENT/LOCAL TEST MODE active by default to allow offline gameplay testing without Firebase
+  const initialData = getInitialUser();
   const [isLocalTestMode, setIsLocalTestModeState] = useState<boolean>(true);
-  const [mockUser, setMockUser] = useState<User | null>(DEFAULT_LOCAL_TEST_USER);
+  const [mockUser, setMockUser] = useState<User | null>(initialData.user);
+  const [savedUsername, setSavedUsername] = useState<string | null>(initialData.savedName);
+  const [currentAccount, setCurrentAccount] = useState<SavedUserAccount | null>(initialData.account);
+  const [savedAccounts, setSavedAccounts] = useState<SavedUserAccount[]>(() =>
+    AccountStore.getAllAccounts()
+  );
+
   const [firebaseAuthState, setFirebaseAuthState] = useState<AuthState>({
     isAuthenticated: false,
     user: null,
-    isLoading: true,
+    isLoading: false,
     error: null,
   });
 
@@ -50,16 +92,94 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const switchMockUser = (displayName: string, email?: string) => {
+    const account = AccountStore.loginOrCreateAccount(displayName, false);
+    setSavedUsername(account.displayName);
+    setCurrentAccount(account);
+    setSavedAccounts(AccountStore.getAllAccounts());
     const updatedUser: User = {
-      uid: 'local_founder_1',
-      email: email || 'founder@investorwars.dev',
-      displayName: displayName || 'Investor (You)',
+      uid: account.uid,
+      email: email || account.email,
+      displayName: account.displayName,
       photoURL: null,
       emailVerified: true,
-      createdAt: Date.now(),
-      lastLoginAt: Date.now(),
+      createdAt: account.createdAt,
+      lastLoginAt: account.lastLoginAt,
     };
     setMockUser(updatedUser);
+  };
+
+  const handleSignInWithUsername = async (username: string): Promise<User> => {
+    const account = AccountStore.loginOrCreateAccount(username, false);
+    setSavedUsername(account.displayName);
+    setCurrentAccount(account);
+    setSavedAccounts(AccountStore.getAllAccounts());
+    const newUser: User = {
+      uid: account.uid,
+      email: account.email,
+      displayName: account.displayName,
+      photoURL: null,
+      emailVerified: true,
+      createdAt: account.createdAt,
+      lastLoginAt: account.lastLoginAt,
+    };
+    setMockUser(newUser);
+    setIsLocalTestModeState(true);
+    return newUser;
+  };
+
+  const handleSignInAsGuest = async (guestName?: string): Promise<User> => {
+    const defaultGuest = guestName?.trim() || `Guest Investor #${Math.floor(100 + Math.random() * 900)}`;
+    const account = AccountStore.loginOrCreateAccount(defaultGuest, true);
+    setSavedUsername(account.displayName);
+    setCurrentAccount(account);
+    setSavedAccounts(AccountStore.getAllAccounts());
+    const newUser: User = {
+      uid: account.uid,
+      email: account.email,
+      displayName: account.displayName,
+      photoURL: null,
+      emailVerified: true,
+      createdAt: account.createdAt,
+      lastLoginAt: account.lastLoginAt,
+    };
+    setMockUser(newUser);
+    setIsLocalTestModeState(true);
+    return newUser;
+  };
+
+  const handleUpdateUsername = async (newUsername: string): Promise<void> => {
+    const cleanName = newUsername.trim();
+    if (!cleanName) return;
+    AccountStore.updateCurrentAccount({
+      displayName: cleanName,
+      username: AccountStore.normalizeUsername(cleanName),
+    });
+    setSavedUsername(cleanName);
+    const updated = AccountStore.getAccount(cleanName);
+    if (updated) {
+      setCurrentAccount(updated);
+    }
+    setSavedAccounts(AccountStore.getAllAccounts());
+    if (mockUser) {
+      setMockUser({
+        ...mockUser,
+        displayName: cleanName,
+        email: `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '') || 'investor'}@investorwars.syndicate`,
+      });
+    }
+  };
+
+  const handleDeleteSavedAccount = (username: string) => {
+    AccountStore.deleteAccount(username);
+    setSavedAccounts(AccountStore.getAllAccounts());
+    if (
+      savedUsername &&
+      AccountStore.normalizeUsername(savedUsername) === AccountStore.normalizeUsername(username)
+    ) {
+      setSavedUsername(null);
+      setMockUser(null);
+      setCurrentAccount(null);
+    }
   };
 
   useEffect(() => {
@@ -89,6 +209,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setFirebaseAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
       const user = await authService.signInWithGoogle();
+      
+      const accountName = user.displayName || user.email?.split('@')[0] || 'Investor';
+      const account = AccountStore.loginOrCreateAccount(accountName, false);
+      if (user.email) {
+        account.email = user.email;
+        AccountStore.saveAccount(account);
+      }
+      setSavedUsername(account.displayName);
+      setCurrentAccount(account);
+      setSavedAccounts(AccountStore.getAllAccounts());
+      setMockUser(user);
+
       setFirebaseAuthState({
         isAuthenticated: true,
         user,
@@ -101,6 +233,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
       throw err;
     }
+  };
+
+  const handleSignInWithGooglePreview = async (
+    customEmail: string = 'bigmommainvestorwars@gmail.com',
+    customName?: string
+  ): Promise<User> => {
+    const cleanName = customName?.trim() || customEmail.split('@')[0] || 'Google Investor';
+    const account = AccountStore.loginOrCreateAccount(cleanName, false);
+    account.email = customEmail.trim();
+    AccountStore.saveAccount(account);
+    setSavedUsername(account.displayName);
+    setCurrentAccount(account);
+    setSavedAccounts(AccountStore.getAllAccounts());
+
+    const previewUser: User = {
+      uid: account.uid,
+      email: account.email,
+      displayName: account.displayName,
+      photoURL: null,
+      emailVerified: true,
+      createdAt: account.createdAt,
+      lastLoginAt: account.lastLoginAt,
+    };
+    setMockUser(previewUser);
+    setIsLocalTestModeState(true);
+    setFirebaseAuthState({
+      isAuthenticated: true,
+      user: previewUser,
+      isLoading: false,
+      error: null,
+    });
+    return previewUser;
   };
 
   const handleSignInWithEmail = async (email: string, password: string): Promise<User> => {
@@ -158,24 +322,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const handleSignOut = async (): Promise<void> => {
-    if (isLocalTestMode) {
-      setMockUser(null);
-      return;
+    localStorage.removeItem('bm_username');
+    setSavedUsername(null);
+    setMockUser(null);
+    if (!isLocalTestMode && authService.isConfigured()) {
+      try {
+        setFirebaseAuthState((prev) => ({ ...prev, isLoading: true }));
+        await authService.signOut();
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
+      }
     }
-    try {
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: true }));
-      await authService.signOut();
-      setFirebaseAuthState({
-        isAuthenticated: false,
-        user: null,
-        isLoading: false,
-        error: null,
-      });
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
-      throw err;
-    }
+    setFirebaseAuthState({
+      isAuthenticated: false,
+      user: null,
+      isLoading: false,
+      error: null,
+    });
   };
 
   // Compute effective auth state depending on mode
@@ -195,12 +359,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isLocalTestMode,
         setLocalTestMode,
         switchMockUser,
+        signInWithUsername: handleSignInWithUsername,
+        signInAsGuest: handleSignInAsGuest,
+        updateUsername: handleUpdateUsername,
         signInWithGoogle: handleSignInWithGoogle,
+        signInWithGooglePreview: handleSignInWithGooglePreview,
         signInWithEmail: handleSignInWithEmail,
         signUpWithEmail: handleSignUpWithEmail,
         signInAnonymously: handleSignInAnonymously,
         signOut: handleSignOut,
         isFirebaseConfigured: authService.isConfigured(),
+        savedUsername,
+        savedAccounts,
+        currentAccount,
+        deleteSavedAccount: handleDeleteSavedAccount,
       }}
     >
       {children}
