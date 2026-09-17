@@ -52,8 +52,8 @@ export const HomeScreen: React.FC = () => {
     setActionError(null);
     try {
       await startQuickMatchQueue();
-      // Auto-transitions to GAMEPLAY or LOBBY once state updates
-      navigate('LOBBY');
+      // Auto-transitions straight into active gameplay with automated bot roster
+      navigate('GAMEPLAY');
     } catch (err: any) {
       console.warn('Quick Match queue error:', err);
       setActionError(err?.message || 'Matchmaking error. Please try again.');

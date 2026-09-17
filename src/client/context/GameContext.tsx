@@ -455,7 +455,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await new Promise((resolve) => setTimeout(resolve, 800));
 
       const reqId = `qm_${Date.now()}`;
-      const res = await cloudFunctionsClient.findOrCreateQuickMatch(reqId);
+      const res = await cloudFunctionsClient.findOrCreateQuickMatch(
+        reqId,
+        user?.displayName || 'Founder Investor',
+        false,
+        undefined,
+        true
+      );
       setMatchmakingQueueState('matched');
 
       await new Promise((resolve) => setTimeout(resolve, 400));

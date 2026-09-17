@@ -582,13 +582,22 @@ export class AuthoritativeServerEngine {
   /**
    * 3f. findOrCreateQuickMatch
    * Resolves quick-match queue by joining the first open public lobby or creating a new one.
+   * When autoFillBots is enabled (default true), automatically fills remaining seats with AI bots and starts the match.
    */
   public async findOrCreateQuickMatch(
     requestId: string,
     userId: string,
     displayName: string,
-    options?: { isPrivate?: boolean; accessCode?: string }
-  ): Promise<{ matchId: string; isNew: boolean; accessCode: string; player: FirestorePlayerDoc }> {
+    options?: { isPrivate?: boolean; accessCode?: string; autoFillBots?: boolean }
+  ): Promise<{ matchId: string; isNew: boolean; accessCode: string; player: FirestorePlayerDoc; isStarted?: boolean }> {
+    const shouldAutoFill = options?.autoFillBots !== false;
+    const botProfiles = [
+      { name: 'Apex Capital (AI)', personality: 'aggressive' },
+      { name: 'Venture Bot (AI)', personality: 'balanced' },
+      { name: 'Bullish Quant (AI)', personality: 'tactical' },
+      { name: 'Silicon Syndicate (AI)', personality: 'opportunistic' },
+    ];
+
     // 1. Check for open public lobby in memory if not private
     if (!options?.isPrivate) {
       for (const [id, container] of this.matches.entries()) {
@@ -598,11 +607,26 @@ export class AuthoritativeServerEngine {
           container.players.size < 4
         ) {
           const player = this.joinMatch(id, requestId, userId, displayName);
+          
+          // If autoFill is requested and match has open seats, fill remaining
+          if (shouldAutoFill) {
+            let botIdx = 0;
+            while (container.players.size < 4 && botIdx < botProfiles.length) {
+              const profile = botProfiles[botIdx % botProfiles.length];
+              this.addBotPlayer(id, `req_fill_bot_${Date.now()}_${botIdx}`, profile.name, profile.personality);
+              botIdx++;
+            }
+            if (container.players.size >= 2) {
+              this.startMatch(id, `start_qm_${Date.now()}`);
+            }
+          }
+
           return {
             matchId: id,
             isNew: false,
             accessCode: container.match.accessCode || id.slice(-6).toUpperCase(),
             player,
+            isStarted: (container.match.status as string) === 'in_progress',
           };
         }
       }
@@ -646,11 +670,25 @@ export class AuthoritativeServerEngine {
               this.matches.set(matchData.id, container);
 
               const player = this.joinMatch(matchData.id, requestId, userId, displayName);
+
+              if (shouldAutoFill) {
+                let botIdx = 0;
+                while (container.players.size < 4 && botIdx < botProfiles.length) {
+                  const profile = botProfiles[botIdx % botProfiles.length];
+                  this.addBotPlayer(matchData.id, `req_fill_bot_${Date.now()}_${botIdx}`, profile.name, profile.personality);
+                  botIdx++;
+                }
+                if (container.match.status === 'waiting_for_players' && container.players.size >= 2) {
+                  this.startMatch(matchData.id, `start_qm_${Date.now()}`);
+                }
+              }
+
               return {
                 matchId: matchData.id,
                 isNew: false,
                 accessCode: matchData.accessCode || matchData.id.slice(-6).toUpperCase(),
                 player,
+                isStarted: container.match.status === 'in_progress',
               };
             }
           }
@@ -677,11 +715,23 @@ export class AuthoritativeServerEngine {
 
     const container = this.matches.get(newMatchId)!;
     const player = container.players.get(userId)!;
+
+    // Automatically fill the remaining 3 seats with AI bots if shouldAutoFill is true
+    if (shouldAutoFill) {
+      for (let i = 0; i < 3; i++) {
+        const profile = botProfiles[i % botProfiles.length];
+        this.addBotPlayer(newMatchId, `req_bot_fill_${Date.now()}_${i}`, profile.name, profile.personality);
+      }
+      // Start the match immediately so players jump straight into action
+      this.startMatch(newMatchId, `start_qm_${Date.now()}`);
+    }
+
     return {
       matchId: newMatchId,
       isNew: true,
       accessCode,
       player,
+      isStarted: container.match.status === 'in_progress',
     };
   }
 

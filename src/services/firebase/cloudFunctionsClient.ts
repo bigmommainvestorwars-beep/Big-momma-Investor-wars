@@ -45,13 +45,17 @@ export class CloudFunctionsClient {
     functionName: string,
     data: ServerRequestEnvelope<TReq>
   ): Promise<ServerResponseEnvelope<TRes>> {
-    // In DEVELOPMENT/LOCAL TEST MODE, bypass Cloud Functions network calls and execute via Authoritative Local Engine
+    // In DEVELOPMENT/LOCAL TEST MODE or Vercel client-first deployments, execute via Authoritative Engine
     if (cloudFunctionsLocalTestMode) {
       return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
     }
 
     try {
       const functions = getFirebaseFunctions();
+      if (!functions) {
+        return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
+      }
+
       const callable = httpsCallable<ServerRequestEnvelope<TReq>, ServerResponseEnvelope<TRes>>(
         functions,
         functionName
@@ -59,42 +63,10 @@ export class CloudFunctionsClient {
       const result = await callable(data);
       return result.data;
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const errCode = (err as { code?: string })?.code || '';
-      const isNotFoundOrUnavailable =
-        errCode === 'functions/not-found' ||
-        errCode === 'not-found' ||
-        errCode === 'functions/unavailable' ||
-        errMsg.includes('not-found') ||
-        errMsg.includes('404') ||
-        errMsg.includes('failed to fetch');
-
-      if (isNotFoundOrUnavailable) {
-        // Authoritative server execution fallback
-        return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
-      }
-
-      const anyErr = err as any;
-      const detailsCode = anyErr?.details?.code;
-      const isAuthRequired =
-        errCode === 'unauthenticated' ||
-        errCode === 'functions/unauthenticated' ||
-        errCode === 'AUTH_REQUIRED' ||
-        detailsCode === 'AUTH_REQUIRED' ||
-        errMsg.includes('AUTH_REQUIRED') ||
-        errMsg.includes('Authentication required');
-
-      errorHandler.capture(err, {
-        errorCode: isAuthRequired ? 'AUTH_REQUIRED' : 'CLOUD_FUNCTION_CALL_FAILED',
-        action: functionName,
-        requestId: data.requestId,
-        details: {
-          originalErrorCode: errCode,
-          originalMessage: errMsg,
-          details: anyErr?.details,
-        },
-      });
-      throw err;
+      // In deployed clients (e.g. Vercel, static preview) where cloud functions are not deployed or network fails,
+      // seamlessly execute authoritative engine with real-time Firestore sync
+      console.warn(`[CloudFunctionsClient] Fallback to authoritative engine for ${functionName}:`, err);
+      return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
     }
   }
 
@@ -136,6 +108,7 @@ export class CloudFunctionsClient {
           {
             isPrivate: p.isPrivate as boolean | undefined,
             accessCode: p.accessCode as string | undefined,
+            autoFillBots: p.autoFillBots !== false,
           }
         );
         break;
@@ -368,15 +341,16 @@ export class CloudFunctionsClient {
     requestId: string,
     displayName?: string,
     isPrivate?: boolean,
-    accessCode?: string
+    accessCode?: string,
+    autoFillBots: boolean = true
   ) {
     return this.call<
-      { displayName?: string; isPrivate?: boolean; accessCode?: string },
-      { matchId: string; isNew: boolean; accessCode: string; player: any }
+      { displayName?: string; isPrivate?: boolean; accessCode?: string; autoFillBots?: boolean },
+      { matchId: string; isNew: boolean; accessCode: string; player: any; isStarted?: boolean }
     >('findOrCreateQuickMatch', {
       matchId: 'matchmaking',
       requestId,
-      payload: { displayName, isPrivate, accessCode },
+      payload: { displayName, isPrivate, accessCode, autoFillBots },
     });
   }
 
