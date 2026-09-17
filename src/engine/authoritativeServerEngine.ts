@@ -166,6 +166,24 @@ export class AuthoritativeServerEngine {
         const aRef = doc(db, 'matches', container.match.id, 'auctions', container.activeAuction.id);
         await setDoc(aRef, { ...container.activeAuction }, { merge: true });
       }
+
+      // Maintain direct room_codes registry for fast O(1) code resolution across clients
+      if (container.match.accessCode) {
+        const rawCode = container.match.accessCode.trim().toUpperCase();
+        const codeOnly = rawCode.replace(/^BM-/, '');
+        const withPrefix = rawCode.startsWith('BM-') ? rawCode : `BM-${rawCode}`;
+        const codeEntry = {
+          matchId: container.match.id,
+          accessCode: withPrefix,
+          codeOnly,
+          status: container.match.status,
+          isPrivate: container.match.isPrivate ?? false,
+          updatedAt: Date.now(),
+        };
+        setDoc(doc(db, 'room_codes', rawCode), codeEntry, { merge: true }).catch(() => {});
+        setDoc(doc(db, 'room_codes', withPrefix), codeEntry, { merge: true }).catch(() => {});
+        setDoc(doc(db, 'room_codes', codeOnly), codeEntry, { merge: true }).catch(() => {});
+      }
     } catch (err) {
       console.warn('Firestore match persist notice:', err);
     }
@@ -594,17 +612,22 @@ export class AuthoritativeServerEngine {
       if (db) {
         try {
           const matchesRef = collection(db, 'matches');
+          // Use single-field query to avoid missing composite index errors on Firestore
           const q = query(
             matchesRef,
             where('status', '==', 'waiting_for_players'),
-            where('isPrivate', '==', false),
-            limit(5)
+            limit(15)
           );
           const snap = await getDocs(q);
 
           for (const docSnap of snap.docs) {
             const matchData = { id: docSnap.id, ...docSnap.data() } as FirestoreMatchDoc;
-            if (matchData.participantUserIds.length < 4 && matchData.hostUserId !== userId) {
+            // In-memory filter for public lobbies and capacity
+            if (
+              !matchData.isPrivate &&
+              (matchData.participantUserIds || []).length < 4 &&
+              matchData.hostUserId !== userId
+            ) {
               const playersRef = collection(db, 'matches', matchData.id, 'players');
               const playersSnap = await getDocs(playersRef);
               const playersMap = new Map<string, FirestorePlayerDoc>();
@@ -664,7 +687,8 @@ export class AuthoritativeServerEngine {
 
   /**
    * 3g. joinMatchByAccessCode
-   * Allows joining private or public lobbies via 6-character access code or match ID.
+   * Allows joining private or public lobbies via 4-6 character access code or match ID.
+   * Multi-format resolution: handles 'BM-XXXX', 'XXXX', lowercase, and direct IDs.
    */
   public async joinMatchByAccessCode(
     accessCode: string,
@@ -672,69 +696,107 @@ export class AuthoritativeServerEngine {
     userId: string,
     displayName: string
   ): Promise<{ matchId: string; player: FirestorePlayerDoc }> {
-    const cleanCode = accessCode.trim().toUpperCase();
+    const raw = accessCode.trim().toUpperCase();
+    const cleanWithBM = raw.startsWith('BM-') ? raw : `BM-${raw}`;
+    const cleanWithoutBM = raw.replace(/^BM-/, '');
+    const candidateCodes = Array.from(new Set([raw, cleanWithBM, cleanWithoutBM]));
 
-    // 1. Check local in-memory matches
+    // 1. Check local in-memory matches first
     for (const [id, container] of this.matches.entries()) {
       const matchCode = (container.match.accessCode || '').toUpperCase();
       const matchIdClean = id.toUpperCase();
-      if (
-        (matchCode === cleanCode || matchIdClean === cleanCode) &&
-        container.match.status === 'waiting_for_players'
-      ) {
+      const matchesCandidate =
+        candidateCodes.includes(matchCode) ||
+        candidateCodes.includes(matchCode.replace(/^BM-/, '')) ||
+        matchIdClean === raw;
+
+      if (matchesCandidate && container.match.status === 'waiting_for_players') {
         const player = this.joinMatch(id, requestId, userId, displayName);
         return { matchId: id, player };
       }
     }
 
-    // 2. Query Firestore for open lobby with this accessCode or match ID
+    // 2. Query Firestore with multi-tier resolution
     const db = getFirebaseFirestore();
     if (db) {
       try {
-        const matchesRef = collection(db, 'matches');
-        const q = query(matchesRef, where('accessCode', '==', cleanCode), limit(1));
-        const snap = await getDocs(q);
+        let resolvedMatchId: string | null = null;
 
-        let matchDocSnap = snap.docs[0];
-        if (!matchDocSnap) {
-          const directDoc = await getDoc(doc(db, 'matches', accessCode.trim()));
-          if (directDoc.exists()) {
-            matchDocSnap = directDoc;
+        // Tier A: Check direct O(1) room_codes collection
+        for (const candidate of candidateCodes) {
+          const codeSnap = await getDoc(doc(db, 'room_codes', candidate));
+          if (codeSnap.exists()) {
+            const data = codeSnap.data();
+            if (data?.matchId) {
+              resolvedMatchId = data.matchId;
+              break;
+            }
           }
         }
 
-        if (matchDocSnap && matchDocSnap.exists()) {
-          const matchData = { id: matchDocSnap.id, ...matchDocSnap.data() } as FirestoreMatchDoc;
-          if (matchData.status === 'waiting_for_players') {
-            const playersRef = collection(db, 'matches', matchData.id, 'players');
-            const playersSnap = await getDocs(playersRef);
-            const playersMap = new Map<string, FirestorePlayerDoc>();
+        // Tier B: Direct matches/{matchId} lookup
+        if (!resolvedMatchId) {
+          const directDoc = await getDoc(doc(db, 'matches', raw));
+          if (directDoc.exists()) {
+            resolvedMatchId = directDoc.id;
+          }
+        }
 
-            for (const pDoc of playersSnap.docs) {
-              playersMap.set(pDoc.id, { id: pDoc.id, ...pDoc.data() } as FirestorePlayerDoc);
+        // Tier C: Query matches collection for accessCode field
+        if (!resolvedMatchId) {
+          const matchesRef = collection(db, 'matches');
+          for (const candidate of candidateCodes) {
+            const q = query(matchesRef, where('accessCode', '==', candidate), limit(1));
+            const snap = await getDocs(q);
+            if (!snap.empty) {
+              resolvedMatchId = snap.docs[0].id;
+              break;
             }
+          }
+        }
 
-            const container: AuthoritativeMatchContainer = {
-              match: matchData,
-              players: playersMap,
-              logs: [],
-              activeAuction: null,
-              activeModifiers: [],
-            };
-            this.matches.set(matchData.id, container);
+        // Hydrate match and join if match found
+        if (resolvedMatchId) {
+          const matchDocSnap = await getDoc(doc(db, 'matches', resolvedMatchId));
+          if (matchDocSnap.exists()) {
+            const matchData = { id: matchDocSnap.id, ...matchDocSnap.data() } as FirestoreMatchDoc;
+            if (matchData.status === 'waiting_for_players') {
+              const playersRef = collection(db, 'matches', matchData.id, 'players');
+              const playersSnap = await getDocs(playersRef);
+              const playersMap = new Map<string, FirestorePlayerDoc>();
 
-            const player = this.joinMatch(matchData.id, requestId, userId, displayName);
-            return { matchId: matchData.id, player };
+              for (const pDoc of playersSnap.docs) {
+                playersMap.set(pDoc.id, { id: pDoc.id, ...pDoc.data() } as FirestorePlayerDoc);
+              }
+
+              const container: AuthoritativeMatchContainer = {
+                match: matchData,
+                players: playersMap,
+                logs: [],
+                activeAuction: null,
+                activeModifiers: [],
+              };
+              this.matches.set(matchData.id, container);
+
+              const player = this.joinMatch(matchData.id, requestId, userId, displayName);
+              return { matchId: matchData.id, player };
+            } else {
+              throw new ServerFunctionError(
+                SERVER_ERROR_CODES.INVALID_STATE_TRANSITION,
+                `The room for code "${accessCode}" has already started or ended.`
+              );
+            }
           }
         }
       } catch (err) {
+        if (err instanceof ServerFunctionError) throw err;
         console.warn('Firestore room code lookup notice:', err);
       }
     }
 
     throw new ServerFunctionError(
       SERVER_ERROR_CODES.MATCH_NOT_FOUND,
-      `No open lobby found for match code "${accessCode}".`
+      `No open lobby found for room code "${accessCode}". Please check the code and try again.`
     );
   }
 

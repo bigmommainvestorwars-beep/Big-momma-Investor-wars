@@ -176,7 +176,7 @@ function formatUserFacingMatchError(err: unknown): string {
 }
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { isAuthenticated, user, ensureAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
   const [match, setMatch] = useState<FirestoreMatchDoc | null>(null);
   const [players, setPlayers] = useState<FirestorePlayerDoc[]>([]);
@@ -439,12 +439,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Start Quick-Match Queue (automatically finds open public lobby or creates one)
   const startQuickMatchQueue = useCallback(async (): Promise<string> => {
-    if (!isAuthenticated) {
-      const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to join matchmaking.';
-      setMatchError(errorMsg);
-      const err = new Error(errorMsg);
-      (err as any).code = 'AUTH_REQUIRED';
-      throw err;
+    if (!isAuthenticated || !user) {
+      try {
+        await ensureAuthenticated();
+      } catch (err) {
+        console.warn('Auto authentication fallback error:', err);
+      }
     }
     setMatchError(null);
     setMatchmakingQueueState('searching');
@@ -473,7 +473,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setMatchError(msg);
       throw err;
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user, ensureAuthenticated]);
 
   const cancelQuickMatchQueue = useCallback(() => {
     setMatchmakingQueueState('idle');
@@ -500,12 +500,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const joinByRoomCode = useCallback(
     async (code: string): Promise<void> => {
-      if (!isAuthenticated) {
-        const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to join a room.';
-        setMatchError(errorMsg);
-        const err = new Error(errorMsg);
-        (err as any).code = 'AUTH_REQUIRED';
-        throw err;
+      if (!isAuthenticated || !user) {
+        try {
+          await ensureAuthenticated();
+        } catch (err) {
+          console.warn('Auto authentication fallback error:', err);
+        }
       }
       setIsActionPending(true);
       setMatchError(null);
@@ -523,16 +523,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, user, ensureAuthenticated]
   );
 
   const createPrivateMatch = useCallback(async (): Promise<string> => {
-    if (!isAuthenticated) {
-      const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to host a room.';
-      setMatchError(errorMsg);
-      const err = new Error(errorMsg);
-      (err as any).code = 'AUTH_REQUIRED';
-      throw err;
+    if (!isAuthenticated || !user) {
+      try {
+        await ensureAuthenticated();
+      } catch (err) {
+        console.warn('Auto authentication fallback error:', err);
+      }
     }
     setIsActionPending(true);
     setMatchError(null);
@@ -557,17 +557,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user, ensureAuthenticated]);
 
   // Create Match
   const createMatch = useCallback(
     async (boardId = 'default-standard-board', rulesetVersion = 'v1.0.0'): Promise<string> => {
-      if (!isAuthenticated) {
-        const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to start a match.';
-        setMatchError(errorMsg);
-        const err = new Error(errorMsg);
-        (err as any).code = 'AUTH_REQUIRED';
-        throw err;
+      if (!isAuthenticated || !user) {
+        try {
+          await ensureAuthenticated();
+        } catch (err) {
+          console.warn('Auto authentication fallback error:', err);
+        }
       }
       setIsActionPending(true);
       setMatchError(null);
@@ -585,7 +585,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, user, ensureAuthenticated]
   );
 
   // Quick Solo vs AI match

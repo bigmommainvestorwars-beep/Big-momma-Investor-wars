@@ -33,6 +33,7 @@ export interface AuthContextValue extends AuthState {
   signUpWithEmail: (email: string, password: string, displayName?: string) => Promise<User>;
   signInAnonymously: () => Promise<User>;
   signOut: () => Promise<void>;
+  ensureAuthenticated: () => Promise<User>;
   isFirebaseConfigured: boolean;
   savedUsername: string | null;
   savedAccounts: SavedUserAccount[];
@@ -43,9 +44,9 @@ export interface AuthContextValue extends AuthState {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 const getInitialUser = (): {
-  user: User | null;
-  savedName: string | null;
-  account: SavedUserAccount | null;
+  user: User;
+  savedName: string;
+  account: SavedUserAccount;
 } => {
   try {
     const savedName = localStorage.getItem('bm_username');
@@ -66,7 +67,23 @@ const getInitialUser = (): {
       };
     }
   } catch {}
-  return { user: null, savedName: null, account: null };
+
+  // Auto-create initial default guest account so every visitor is instantly ready to play
+  const defaultGuest = `Guest Investor #${Math.floor(100 + Math.random() * 900)}`;
+  const guestAccount = AccountStore.loginOrCreateAccount(defaultGuest, true);
+  return {
+    user: {
+      uid: guestAccount.uid,
+      email: guestAccount.email,
+      displayName: guestAccount.displayName,
+      photoURL: null,
+      emailVerified: true,
+      createdAt: guestAccount.createdAt,
+      lastLoginAt: guestAccount.lastLoginAt,
+    },
+    savedName: guestAccount.displayName,
+    account: guestAccount,
+  };
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -342,15 +359,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
   };
 
-  // Compute effective auth state depending on mode
-  const effectiveAuthState: AuthState = isLocalTestMode
-    ? {
-        isAuthenticated: Boolean(mockUser),
-        user: mockUser,
-        isLoading: false,
-        error: null,
+  const handleEnsureAuthenticated = async (): Promise<User> => {
+    if (firebaseAuthState.user) return firebaseAuthState.user;
+    if (mockUser) return mockUser;
+    if (authService.isConfigured()) {
+      try {
+        const anon = await authService.signInAnonymously();
+        return anon;
+      } catch (err) {
+        console.warn('Anonymous sign-in fallback notice:', err);
       }
-    : firebaseAuthState;
+    }
+    return handleSignInAsGuest();
+  };
+
+  // Compute effective auth state across both modes seamlessly
+  const effectiveUser = isLocalTestMode
+    ? (mockUser || firebaseAuthState.user)
+    : (firebaseAuthState.user || mockUser);
+
+  const effectiveAuthState: AuthState = {
+    isAuthenticated: Boolean(effectiveUser),
+    user: effectiveUser,
+    isLoading: firebaseAuthState.isLoading,
+    error: firebaseAuthState.error,
+  };
 
   return (
     <AuthContext.Provider
@@ -368,6 +401,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signUpWithEmail: handleSignUpWithEmail,
         signInAnonymously: handleSignInAnonymously,
         signOut: handleSignOut,
+        ensureAuthenticated: handleEnsureAuthenticated,
         isFirebaseConfigured: authService.isConfigured(),
         savedUsername,
         savedAccounts,

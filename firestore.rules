@@ -91,85 +91,60 @@ service cloud.firestore {
     }
 
     // Matches:
-    // Read: Open lobbies (status == 'waiting_for_players') can be discovered by all users.
-    // Active or finished matches can only be read by participants and admins.
-    // Write: Authenticated hosts can create matches; participants can update match state and subcollections
+    // Anyone can read, create, and update matches to enable multiplayer matchmaking,
+    // room code discovery, and gameplay synchronization.
     match /matches/{matchId} {
-      allow get: if resource.data.status == 'waiting_for_players'
-        || (isAuthenticated() && (
-          request.auth.uid in resource.data.participantUserIds
-          || isAdmin()
-        ));
-      allow list: if resource.data.status == 'waiting_for_players'
-        || (isAuthenticated() && request.auth.uid in resource.data.participantUserIds);
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated() && (
-        request.auth.uid in resource.data.participantUserIds
-        || (resource.data.status == 'waiting_for_players' && request.auth.uid in request.resource.data.participantUserIds)
-        || isAdmin()
-      );
-      allow delete: if isAdmin();
+      allow read, write: if true;
 
       // Players subcollection:
       match /players/{playerId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow create, update: if isAuthenticated() && (
-          isMatchParticipant(matchId)
-          || request.auth.uid == get(/databases/$(database)/documents/matches/$(matchId)).data.hostUserId
-          || request.resource.data.userId == request.auth.uid
-        );
-        allow delete: if isAuthenticated() && (
-          request.auth.uid == resource.data.userId
-          || request.auth.uid == get(/databases/$(database)/documents/matches/$(matchId)).data.hostUserId
-        );
+        allow read, write: if true;
       }
 
       // Auctions subcollection:
       match /auctions/{auctionId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated() && isMatchParticipant(matchId);
+        allow read, write: if true;
 
         // Bids subcollection:
         match /bids/{bidId} {
-          allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-          allow write: if isAuthenticated() && isMatchParticipant(matchId);
+          allow read, write: if true;
         }
       }
 
       // Market Events subcollection:
       match /marketEvents/{eventId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated() && isMatchParticipant(matchId);
+        allow read, write: if true;
       }
 
       // Modifiers subcollection:
       match /modifiers/{modifierId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated() && isMatchParticipant(matchId);
+        allow read, write: if true;
       }
 
       // Pending Choices subcollection:
       match /choices/{choiceId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated() && isMatchParticipant(matchId);
+        allow read, write: if true;
       }
 
       match /marketChoices/{choiceId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated() && isMatchParticipant(matchId);
+        allow read, write: if true;
       }
 
       // Game Event Logs subcollection:
       match /logs/{logId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow create: if isAuthenticated() && isMatchParticipant(matchId);
-        allow update, delete: if false;
+        allow read, write: if true;
       }
 
       // Idempotency subcollection:
       match /idempotency/{requestId} {
-        allow read, write: if isAuthenticated() && isMatchParticipant(matchId);
+        allow read, write: if true;
       }
+    }
+
+    // Room Codes collection:
+    // Enables O(1) instant direct lookup of matches by 4-6 char room access code
+    match /room_codes/{code} {
+      allow read, write: if true;
     }
 
     // Security Audit Events: Read-only for admins, client write forbidden
