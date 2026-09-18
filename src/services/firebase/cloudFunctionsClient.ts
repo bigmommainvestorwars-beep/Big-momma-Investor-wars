@@ -37,7 +37,7 @@ export interface ServerResponseEnvelope<T = unknown> {
   };
 }
 
-let cloudFunctionsLocalTestMode = true;
+let cloudFunctionsLocalTestMode = false;
 
 export function setCloudFunctionsLocalTestMode(enabled: boolean): void {
   cloudFunctionsLocalTestMode = enabled;
@@ -48,10 +48,7 @@ export function isCloudFunctionsLocalTestMode(): boolean {
 }
 
 async function ensureMatchHydratedFromFirestore(matchId: string): Promise<boolean> {
-  if (!matchId || matchId === 'system') return false;
-  if (authoritativeServerEngine.getMatchContainer(matchId)) {
-    return true;
-  }
+  if (!matchId || matchId === 'system' || matchId === 'matchmaking') return false;
   const db = getFirebaseFirestore();
   if (!db) return false;
   try {
