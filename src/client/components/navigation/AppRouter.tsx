@@ -21,6 +21,7 @@ import { LandscapeGameScreen } from '../game/LandscapeGameScreen';
 // Network & Matchmaking Overlays
 import { NetworkStatusBanner } from '../network/NetworkStatusBanner';
 import { MatchmakingQueueOverlay } from '../network/MatchmakingQueueOverlay';
+import { QuickMatchDiagnosticPanel } from '../QuickMatchDiagnosticPanel';
 
 export const AppRouter: React.FC = () => {
   const { currentScreen } = useNavigation();
@@ -66,6 +67,7 @@ export const AppRouter: React.FC = () => {
     <>
       <NetworkStatusBanner />
       <MatchmakingQueueOverlay />
+      <QuickMatchDiagnosticPanel />
       {renderScreen()}
     </>
   );

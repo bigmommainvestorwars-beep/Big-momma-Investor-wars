@@ -132,17 +132,16 @@ export const findOrCreateQuickMatch = onCall(
       const { requestId, payload } = request.data;
       const displayName = payload?.displayName || auth.email?.split('@')[0] || 'Investor';
 
-      // 1. Look for existing open public matches
+      // 1. Look for existing open public matches (queried by status, filtered in memory for public matches to avoid composite index requirements)
       const openMatchesSnap = await db
         .collection('matches')
         .where('status', '==', 'waiting_for_players')
-        .where('isPrivate', '==', false)
-        .limit(10)
+        .limit(20)
         .get();
 
       for (const docSnap of openMatchesSnap.docs) {
         const match = docSnap.data() as MatchState;
-        if (match.participantUserIds.length < 4) {
+        if (!match.isPrivate && match.participantUserIds && match.participantUserIds.length < 4) {
           const matchRef = docSnap.ref;
           try {
             const joinResult = await db.runTransaction(async (t) => {

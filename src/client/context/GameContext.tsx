@@ -6,7 +6,8 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { enableNetwork } from 'firebase/firestore';
-import { getFirebaseFirestore } from '../../services/firebase/config';
+import { getFirebaseFirestore, getFirebaseAuth } from '../../services/firebase/config';
+import { quickMatchDiagnosticStore } from '../../services/quickMatchDiagnosticStore';
 import { GameState } from '../../types/game';
 import { ActionRequest } from '../../types/request';
 import { firestoreService } from '../../services/firebase/firestoreService';
@@ -439,13 +440,50 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Start Quick-Match Queue (automatically finds open public lobby or creates one)
   const startQuickMatchQueue = useCallback(async (): Promise<string> => {
-    if (!isAuthenticated) {
+    quickMatchDiagnosticStore.recordStage('user_tapped_quick_match');
+
+    const auth = getFirebaseAuth();
+    const currentUser = auth?.currentUser;
+    if (!currentUser || !isAuthenticated) {
+      quickMatchDiagnosticStore.update({ authStatus: 'FAIL' });
       const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to join matchmaking.';
+      quickMatchDiagnosticStore.recordError('AUTH_REQUIRED', errorMsg);
       setMatchError(errorMsg);
       const err = new Error(errorMsg);
       (err as any).code = 'AUTH_REQUIRED';
       throw err;
     }
+    quickMatchDiagnosticStore.update({ authStatus: 'OK' });
+    quickMatchDiagnosticStore.recordStage('auth_user_checked', currentUser.uid);
+
+    try {
+      if (currentUser?.getIdToken) {
+        await currentUser.getIdToken();
+        quickMatchDiagnosticStore.recordStage('id_token_obtained');
+      }
+    } catch (tokenErr: any) {
+      console.warn('[GameContext] Token acquisition notice (offline/local):', tokenErr);
+      quickMatchDiagnosticStore.recordStage('id_token_fallback_local');
+    }
+
+    try {
+      const appCheckModule = await import('firebase/app-check');
+      const appCheckInstance = (appCheckModule as any).getAppCheck ? (appCheckModule as any).getAppCheck() : null;
+      if (appCheckInstance && (appCheckModule as any).getToken) {
+        const appCheckResult = await (appCheckModule as any).getToken(appCheckInstance, false);
+        if (appCheckResult && appCheckResult.token) {
+          quickMatchDiagnosticStore.update({ appCheckStatus: 'OK' });
+        } else {
+          quickMatchDiagnosticStore.update({ appCheckStatus: 'FAIL' });
+        }
+      } else {
+        quickMatchDiagnosticStore.update({ appCheckStatus: 'UNKNOWN' });
+      }
+    } catch {
+      quickMatchDiagnosticStore.update({ appCheckStatus: 'UNKNOWN' });
+    }
+    quickMatchDiagnosticStore.recordStage('app_check_checked');
+
     setMatchError(null);
     setMatchmakingQueueState('searching');
     setQueueTimeSeconds(0);
@@ -455,23 +493,51 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await new Promise((resolve) => setTimeout(resolve, 800));
 
       const reqId = `qm_${Date.now()}`;
+      quickMatchDiagnosticStore.recordStage('cloud_function_invocation_begins', reqId);
+      quickMatchDiagnosticStore.recordStage('callable_function_name', 'findOrCreateQuickMatch');
+      quickMatchDiagnosticStore.update({ functionStatus: 'PENDING' });
+
       const res = await cloudFunctionsClient.findOrCreateQuickMatch(
         reqId,
         user?.displayName || 'Investor'
       );
+
+      quickMatchDiagnosticStore.recordStage('cloud_function_returns');
+
+      if (!res.success || res.error) {
+        quickMatchDiagnosticStore.update({ functionStatus: 'FAIL' });
+        const errCode = res.error?.code || 'internal';
+        const errMsg = res.error?.message || 'Quick match function returned error success=false';
+        quickMatchDiagnosticStore.recordError(errCode, errMsg);
+        const err = new Error(errMsg);
+        (err as any).code = errCode;
+        throw err;
+      }
+
+      quickMatchDiagnosticStore.update({ functionStatus: 'OK' });
       setMatchmakingQueueState('matched');
 
       await new Promise((resolve) => setTimeout(resolve, 400));
       setMatchmakingQueueState('joining');
 
       const matchId = res.data?.matchId;
+      const playerId = res.data?.player?.id || res.data?.player?.uid || null;
+
       if (!matchId) throw new Error('Failed to resolve matchmaking room.');
+
+      quickMatchDiagnosticStore.recordStage('match_id_returned', matchId);
+      quickMatchDiagnosticStore.recordStage('player_id_returned', playerId || 'unknown');
+      quickMatchDiagnosticStore.update({ matchId, playerId });
 
       setActiveMatchId(matchId);
       setMatchmakingQueueState('idle');
       return matchId;
-    } catch (err) {
+    } catch (err: any) {
       setMatchmakingQueueState('idle');
+      quickMatchDiagnosticStore.update({ functionStatus: 'FAIL' });
+      const errCode = err?.code || err?.details?.code || 'internal';
+      const errMsg = err?.message || String(err);
+      quickMatchDiagnosticStore.recordError(errCode, errMsg);
       const msg = formatUserFacingMatchError(err);
       setMatchError(msg);
       throw err;

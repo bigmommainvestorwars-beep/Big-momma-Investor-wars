@@ -13,8 +13,8 @@ export function withErrorHandling<T, Req = any>(
       if (err instanceof HttpsError) {
         throw err;
       }
-      console.error('Unhandled internal error in Cloud Function:', err);
-      throw new HttpsError('internal', 'An internal server error occurred.');
+      console.error('Unhandled internal error in Cloud Function:', err?.message || err, err?.stack || '');
+      throw new HttpsError('internal', `An internal server error occurred: ${err?.message || 'unknown'}`);
     }
   };
 }

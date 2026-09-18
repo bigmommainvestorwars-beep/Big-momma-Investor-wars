@@ -12,6 +12,8 @@ import {
   Firestore,
   connectFirestoreEmulator,
   setLogLevel,
+  persistentLocalCache,
+  persistentMultipleTabManager,
 } from 'firebase/firestore';
 import { getFunctions, Functions, connectFunctionsEmulator } from 'firebase/functions';
 import { ENV, validateFirebaseClientConfig } from '../../config/env';
@@ -119,10 +121,18 @@ export function getFirebaseFirestore(): Firestore {
   }
   const dbId = rawDbId ? rawDbId : undefined;
 
-  const firestoreSettings = {
+  const firestoreSettings: any = {
     experimentalAutoDetectLongPolling: true,
     ignoreUndefinedProperties: true,
   };
+
+  try {
+    firestoreSettings.localCache = persistentLocalCache({
+      tabManager: persistentMultipleTabManager(),
+    });
+  } catch {
+    // Fallback if local cache persistence is restricted in sandbox
+  }
 
   try {
     cachedDb = dbId

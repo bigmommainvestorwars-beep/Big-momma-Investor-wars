@@ -20,6 +20,8 @@ import {
 import { getFirebaseFirestore, isFirebaseConfigured } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
 import { PendingMarketChoiceDoc, MarketEvent } from '../../types/marketEvent';
+import { isCloudFunctionsLocalTestMode } from './cloudFunctionsClient';
+import { quickMatchDiagnosticStore } from '../quickMatchDiagnosticStore';
 
 export interface FirestoreMatchDoc {
   id: string;
@@ -285,6 +287,7 @@ export class MatchSyncService {
   }
 
   private getSafeDb(): Firestore | null {
+    if (isCloudFunctionsLocalTestMode()) return null;
     if (!isFirebaseConfigured()) return null;
     try {
       return getFirebaseFirestore();
@@ -296,18 +299,21 @@ export class MatchSyncService {
   /**
    * Subscribe to match document
    */
-  public subscribeToMatch(
+   public subscribeToMatch(
     matchId: string,
     onData: (match: FirestoreMatchDoc | null) => void,
     onError?: (err: Error) => void
   ): Unsubscribe {
+    quickMatchDiagnosticStore.recordStage('firestore_match_subscription_begins', matchId);
+    quickMatchDiagnosticStore.update({ firestoreMatchListener: 'OK' });
+
     if (!this.matchListeners.has(matchId)) {
       this.matchListeners.set(matchId, new Set());
     }
     this.matchListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (this.localContainerProvider) {
+    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData({ ...local.match });
@@ -324,13 +330,18 @@ export class MatchSyncService {
         (snap) => {
           if (snap.exists()) {
             const data = { id: snap.id, ...snap.data() } as FirestoreMatchDoc;
+            quickMatchDiagnosticStore.recordStage('firestore_match_snapshot_received', data.status);
+            quickMatchDiagnosticStore.recordStage('lobby_state_updated', data.status);
+            if (data.status === 'in_progress') {
+              quickMatchDiagnosticStore.recordStage('match_start_propagated', data.status);
+            }
             if (this.remoteMatchUpdateHandler) {
               try {
                 this.remoteMatchUpdateHandler(data);
               } catch {}
             }
             onData(data);
-          } else if (this.localContainerProvider) {
+          } else if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
             const local = this.localContainerProvider(matchId);
             if (local) {
               onData({ ...local.match });
@@ -338,6 +349,8 @@ export class MatchSyncService {
           }
         },
         (err) => {
+          quickMatchDiagnosticStore.update({ firestoreMatchListener: 'FAIL' });
+          quickMatchDiagnosticStore.recordError(err.name || 'firestore-match-error', err.message);
           if (onError) onError(err);
           else console.warn('Match sync warning:', err.message);
         }
@@ -358,13 +371,16 @@ export class MatchSyncService {
     onData: (players: FirestorePlayerDoc[]) => void,
     onError?: (err: Error) => void
   ): Unsubscribe {
+    quickMatchDiagnosticStore.recordStage('firestore_player_subscription_begins', matchId);
+    quickMatchDiagnosticStore.update({ firestorePlayerListener: 'OK' });
+
     if (!this.playersListeners.has(matchId)) {
       this.playersListeners.set(matchId, new Set());
     }
     this.playersListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (this.localContainerProvider) {
+    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local && local.players.length > 0) {
         onData([...local.players]);
@@ -382,8 +398,16 @@ export class MatchSyncService {
           const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
           players.sort((a, b) => a.turnOrder - b.turnOrder);
 
+          quickMatchDiagnosticStore.recordStage('firestore_player_snapshot_received', `count=${players.length}`);
+          const playerNames = players.map(p => p.displayName || p.id);
+          quickMatchDiagnosticStore.update({ lobbyPlayers: playerNames });
+
+          if (players.length >= 2) {
+            quickMatchDiagnosticStore.recordStage('second_player_joined', `total=${players.length}`);
+          }
+
           // If snapshot is empty but local container has players, preserve local players
-          if (players.length === 0 && this.localContainerProvider) {
+          if (players.length === 0 && isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
             const local = this.localContainerProvider(matchId);
             if (local && local.players.length > 0) {
               onData([...local.players]);
@@ -399,6 +423,8 @@ export class MatchSyncService {
           onData(players);
         },
         (err) => {
+          quickMatchDiagnosticStore.update({ firestorePlayerListener: 'FAIL' });
+          quickMatchDiagnosticStore.recordError(err.name || 'firestore-player-error', err.message);
           if (onError) onError(err);
           else console.warn('Players sync warning:', err.message);
         }
@@ -425,7 +451,7 @@ export class MatchSyncService {
     this.logsListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (this.localContainerProvider) {
+    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.logs]);
@@ -492,7 +518,7 @@ export class MatchSyncService {
     this.auctionListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (this.localContainerProvider) {
+    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeAuction ? { ...local.activeAuction } : null);
@@ -538,7 +564,7 @@ export class MatchSyncService {
   ): Unsubscribe {
     this.openMatchesListeners.add(onData);
 
-    if (this.localOpenMatchesProvider) {
+    if (isCloudFunctionsLocalTestMode() && this.localOpenMatchesProvider) {
       try {
         const localMatches = this.localOpenMatchesProvider();
         if (localMatches.length > 0) {
@@ -562,7 +588,7 @@ export class MatchSyncService {
           const remoteMatches = snap.docs
             .map((d) => ({ id: d.id, ...d.data() } as FirestoreMatchDoc))
             .filter((m) => !m.isPrivate);
-          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          const localMatches = isCloudFunctionsLocalTestMode() && this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
           // Combine unique matches
           const matchMap = new Map<string, FirestoreMatchDoc>();
           for (const m of localMatches) matchMap.set(m.id, m);
@@ -571,14 +597,14 @@ export class MatchSyncService {
         },
         (err) => {
           // Gracefully default to local open matches if unauthenticated or security rules active
-          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          const localMatches = isCloudFunctionsLocalTestMode() && this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
           onData(localMatches);
           if (onError) onError(err);
           else console.warn('Lobby sync warning:', err.message);
         }
       );
     } else {
-      const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+      const localMatches = isCloudFunctionsLocalTestMode() && this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
       onData(localMatches);
     }
 
@@ -602,7 +628,7 @@ export class MatchSyncService {
     this.pendingChoiceListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (this.localContainerProvider) {
+    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.pendingChoice ? { ...local.pendingChoice } : null);
@@ -650,7 +676,7 @@ export class MatchSyncService {
     this.marketEventListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (this.localContainerProvider) {
+    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeMarketEvent ? { ...local.activeMarketEvent } : null);
