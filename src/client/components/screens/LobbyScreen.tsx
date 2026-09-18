@@ -180,9 +180,10 @@ export const LobbyScreen: React.FC = () => {
               </div>
 
               <button
+                id={`add-bot-seat-${occupiedSeats + i + 1}-btn`}
                 onClick={() => addBotPlayer(`AI Partner ${occupiedSeats + i + 1}`)}
                 disabled={isActionPending}
-                className="px-2.5 py-1 rounded-lg bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border border-purple-800/40 text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50"
+                className="px-2.5 py-1 rounded-lg bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border border-purple-800/40 text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50 active:scale-95"
               >
                 + Add Bot
               </button>

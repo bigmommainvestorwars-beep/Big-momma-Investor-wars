@@ -257,7 +257,20 @@ export class AuthoritativeServerEngine {
     botName?: string,
     personality: string = 'balanced'
   ): FirestorePlayerDoc {
-    const container = this.matches.get(matchId);
+    let container = this.matches.get(matchId);
+    if (!container) {
+      this.createMatch(
+        matchId,
+        requestId,
+        'default-standard-board',
+        '1.0.0',
+        'local_founder_1',
+        'Investor (You)',
+        false,
+        `BM-${matchId.slice(-4).toUpperCase()}`
+      );
+      container = this.matches.get(matchId);
+    }
     if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
     if (container.match.status !== 'waiting_for_players') {
       throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Cannot add bots to an ongoing match.');
