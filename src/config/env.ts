@@ -49,6 +49,16 @@ function resolveEnvironment(): AppEnvironment {
   return 'development';
 }
 
+function resolveFirestoreDatabaseId(): string {
+  const raw = getEnvVar('VITE_FIREBASE_FIRESTORE_DATABASE_ID') || (firebaseAppletConfig as any)?.firestoreDatabaseId || '(default)';
+  const trimmed = raw.trim();
+  // If the user or platform inadvertently provided a Realtime Database URL (e.g. https://...firebaseio.com), sanitize and fallback to '(default)'
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('firebaseio.com') || !trimmed) {
+    return '(default)';
+  }
+  return trimmed;
+}
+
 const currentEnv = resolveEnvironment();
 
 export const ENV: ClientEnvConfig = {
@@ -65,7 +75,7 @@ export const ENV: ClientEnvConfig = {
     storageBucket: getEnvVar('VITE_FIREBASE_STORAGE_BUCKET') || (firebaseAppletConfig as any)?.storageBucket || '',
     messagingSenderId: getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID') || (firebaseAppletConfig as any)?.messagingSenderId || '',
     appId: getEnvVar('VITE_FIREBASE_APP_ID') || (firebaseAppletConfig as any)?.appId || '',
-    firestoreDatabaseId: getEnvVar('VITE_FIREBASE_FIRESTORE_DATABASE_ID') || (firebaseAppletConfig as any)?.firestoreDatabaseId || '(default)',
+    firestoreDatabaseId: resolveFirestoreDatabaseId(),
   },
 };
 

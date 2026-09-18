@@ -71,6 +71,67 @@ export class AuthoritativeServerEngine {
       };
     });
     matchSyncService.registerLocalOpenMatchesProvider(() => this.getOpenMatches());
+    matchSyncService.registerRemoteUpdateHandlers(
+      (remoteMatch) => {
+        const local = this.matches.get(remoteMatch.id);
+        if (local) {
+          if (remoteMatch.stateVersion >= local.match.stateVersion) {
+            local.match = { ...local.match, ...remoteMatch };
+          }
+        } else {
+          this.hydrateMatch(remoteMatch, []);
+        }
+      },
+      (matchId, remotePlayers) => {
+        const local = this.matches.get(matchId);
+        if (local) {
+          for (const p of remotePlayers) {
+            local.players.set(p.id, p);
+          }
+          local.match.participantUserIds = Array.from(
+            new Set([...local.match.participantUserIds, ...remotePlayers.map((p) => p.userId)])
+          );
+        }
+      }
+    );
+  }
+
+  public hydrateMatch(
+    matchDoc: FirestoreMatchDoc,
+    playersList: FirestorePlayerDoc[],
+    logsList: FirestoreLogDoc[] = [],
+    activeAuction: FirestoreAuctionDoc | null = null,
+    pendingChoice: PendingMarketChoiceDoc | null = null,
+    activeMarketEvent: MarketEvent | null = null
+  ): AuthoritativeMatchContainer {
+    const existing = this.matches.get(matchDoc.id);
+    const playersMap = new Map<string, FirestorePlayerDoc>();
+    for (const p of playersList) {
+      playersMap.set(p.id, p);
+    }
+    if (existing) {
+      existing.match = { ...existing.match, ...matchDoc };
+      for (const p of playersList) {
+        existing.players.set(p.id, p);
+      }
+      if (logsList.length > 0) existing.logs = logsList;
+      if (activeAuction !== undefined) existing.activeAuction = activeAuction;
+      if (pendingChoice !== undefined) existing.pendingMarketChoice = pendingChoice;
+      if (activeMarketEvent !== undefined) existing.activeMarketEvent = activeMarketEvent;
+      return existing;
+    }
+
+    const container: AuthoritativeMatchContainer = {
+      match: matchDoc,
+      players: playersMap,
+      logs: logsList,
+      activeAuction,
+      activeModifiers: [],
+      pendingMarketChoice: pendingChoice,
+      activeMarketEvent,
+    };
+    this.matches.set(matchDoc.id, container);
+    return container;
   }
 
   public getOpenMatches(): FirestoreMatchDoc[] {
@@ -127,6 +188,19 @@ export class AuthoritativeServerEngine {
       container.pendingMarketChoice,
       container.activeMarketEvent
     );
+    matchSyncService
+      .syncContainerToFirestore(
+        container.match.id,
+        container.match,
+        playersList,
+        container.logs,
+        container.activeAuction,
+        container.pendingMarketChoice,
+        container.activeMarketEvent
+      )
+      .catch((err) => {
+        console.warn('[AuthoritativeServerEngine] Background Firestore sync non-fatal:', err);
+      });
   }
 
   private assertMatchActive(match: FirestoreMatchDoc): void {

@@ -4,9 +4,16 @@
  */
 
 import { httpsCallable } from 'firebase/functions';
-import { getFirebaseFunctions, getFirebaseAuth } from './config';
+import { doc, getDoc, getDocs, collection, query, where, limit } from 'firebase/firestore';
+import { getFirebaseFunctions, getFirebaseAuth, getFirebaseFirestore } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
 import { authoritativeServerEngine } from '../../engine/authoritativeServerEngine';
+import {
+  FirestoreMatchDoc,
+  FirestorePlayerDoc,
+  FirestoreLogDoc,
+  FirestoreAuctionDoc,
+} from './matchSyncService';
 
 export interface ServerRequestEnvelope<T = unknown> {
   matchId: string;
@@ -40,6 +47,42 @@ export function isCloudFunctionsLocalTestMode(): boolean {
   return cloudFunctionsLocalTestMode;
 }
 
+async function ensureMatchHydratedFromFirestore(matchId: string): Promise<boolean> {
+  if (!matchId || matchId === 'system') return false;
+  if (authoritativeServerEngine.getMatchContainer(matchId)) {
+    return true;
+  }
+  const db = getFirebaseFirestore();
+  if (!db) return false;
+  try {
+    const matchSnap = await getDoc(doc(db, 'matches', matchId));
+    if (!matchSnap.exists()) return false;
+    const matchData = { id: matchSnap.id, ...matchSnap.data() } as FirestoreMatchDoc;
+
+    // Fetch players
+    const playersSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
+    const playersList = playersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
+
+    // Fetch logs
+    const logsSnap = await getDocs(query(collection(db, 'matches', matchId, 'logs'), limit(20)));
+    const logsList = logsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
+
+    // Fetch auction
+    const aucSnap = await getDocs(
+      query(collection(db, 'matches', matchId, 'auctions'), where('status', '==', 'active'), limit(1))
+    );
+    const activeAuction = !aucSnap.empty
+      ? ({ id: aucSnap.docs[0].id, ...aucSnap.docs[0].data() } as FirestoreAuctionDoc)
+      : null;
+
+    authoritativeServerEngine.hydrateMatch(matchData, playersList, logsList, activeAuction);
+    return true;
+  } catch (e) {
+    console.warn('[CloudFunctionsClient] Match hydration error:', e);
+    return false;
+  }
+}
+
 export class CloudFunctionsClient {
   public async call<TReq, TRes>(
     functionName: string,
@@ -71,15 +114,25 @@ export class CloudFunctionsClient {
     }
   }
 
-  private executeAuthoritativeLocal<TReq, TRes>(
+  private async executeAuthoritativeLocal<TReq, TRes>(
     functionName: string,
     data: ServerRequestEnvelope<TReq>
-  ): ServerResponseEnvelope<TRes> {
+  ): Promise<ServerResponseEnvelope<TRes>> {
     const auth = getFirebaseAuth();
     const p = (data.payload || {}) as Record<string, unknown>;
-    const currentUserId =
-      (p.actingPlayerId as string) || (p.botId as string) || auth?.currentUser?.uid || 'local_founder_1';
+    let currentUserId =
+      (p.actingPlayerId as string) || (p.botId as string) || auth?.currentUser?.uid || '';
+    if (!currentUserId) {
+      try {
+        currentUserId = localStorage.getItem('bm_user_uid') || '';
+      } catch {}
+      if (!currentUserId) currentUserId = 'local_founder_1';
+    }
     const currentDisplayName = (p.displayName as string) || auth?.currentUser?.displayName || 'Investor (You)';
+
+    if (data.matchId && data.matchId !== 'system') {
+      await ensureMatchHydratedFromFirestore(data.matchId);
+    }
 
     let resultData: unknown = null;
 
@@ -102,24 +155,117 @@ export class CloudFunctionsClient {
         break;
       }
       case 'findOrCreateQuickMatch': {
-        resultData = authoritativeServerEngine.findOrCreateQuickMatch(
-          data.requestId,
-          currentUserId,
-          (p.displayName as string) || currentDisplayName,
-          {
-            isPrivate: p.isPrivate as boolean | undefined,
-            accessCode: p.accessCode as string | undefined,
+        let matchedLobby: { matchId: string; player: any } | null = null;
+        const db = getFirebaseFirestore();
+        if (db) {
+          try {
+            const matchesRef = collection(db, 'matches');
+            const q = query(matchesRef, where('status', '==', 'waiting_for_players'), limit(10));
+            const snap = await getDocs(q);
+            for (const d of snap.docs) {
+              const m = { id: d.id, ...d.data() } as FirestoreMatchDoc;
+              if (
+                !m.isPrivate &&
+                m.participantUserIds &&
+                !m.participantUserIds.includes(currentUserId) &&
+                m.participantUserIds.length < 4
+              ) {
+                await ensureMatchHydratedFromFirestore(m.id);
+                const player = authoritativeServerEngine.joinMatch(
+                  m.id,
+                  data.requestId,
+                  currentUserId,
+                  (p.displayName as string) || currentDisplayName
+                );
+                matchedLobby = { matchId: m.id, player };
+                break;
+              }
+            }
+          } catch (e) {
+            console.warn('[CloudFunctionsClient] Quick match query fallback:', e);
           }
-        );
+        }
+
+        if (matchedLobby) {
+          resultData = { matchId: matchedLobby.matchId, isNew: false, player: matchedLobby.player };
+        } else {
+          resultData = authoritativeServerEngine.findOrCreateQuickMatch(
+            data.requestId,
+            currentUserId,
+            (p.displayName as string) || currentDisplayName,
+            {
+              isPrivate: p.isPrivate as boolean | undefined,
+              accessCode: p.accessCode as string | undefined,
+            }
+          );
+        }
         break;
       }
       case 'joinMatchByAccessCode': {
-        resultData = authoritativeServerEngine.joinMatchByAccessCode(
-          p.accessCode as string,
-          data.requestId,
-          currentUserId,
-          (p.displayName as string) || currentDisplayName
-        );
+        const rawCode = String(p.accessCode || '').trim();
+        const accessCode = rawCode.toUpperCase();
+        let joinedResult: any = null;
+
+        // 1. Try local memory search
+        try {
+          joinedResult = authoritativeServerEngine.joinMatchByAccessCode(
+            accessCode,
+            data.requestId,
+            currentUserId,
+            (p.displayName as string) || currentDisplayName
+          );
+        } catch {
+          // If not in local memory, fall back to Firestore lookup
+        }
+
+        if (joinedResult) {
+          resultData = joinedResult;
+        } else {
+          // 2. Lookup in Firestore
+          const db = getFirebaseFirestore();
+          let targetMatchDoc: FirestoreMatchDoc | null = null;
+          if (db) {
+            try {
+              const q = query(
+                collection(db, 'matches'),
+                where('accessCode', '==', accessCode),
+                limit(1)
+              );
+              const snap = await getDocs(q);
+              if (!snap.empty) {
+                targetMatchDoc = { id: snap.docs[0].id, ...snap.docs[0].data() } as FirestoreMatchDoc;
+              } else {
+                const docSnap = await getDoc(doc(db, 'matches', rawCode));
+                if (docSnap.exists()) {
+                  targetMatchDoc = { id: docSnap.id, ...docSnap.data() } as FirestoreMatchDoc;
+                } else {
+                  const upperSnap = await getDoc(doc(db, 'matches', accessCode));
+                  if (upperSnap.exists()) {
+                    targetMatchDoc = { id: upperSnap.id, ...upperSnap.data() } as FirestoreMatchDoc;
+                  }
+                }
+              }
+            } catch (err) {
+              console.warn('[CloudFunctionsClient] Firestore match lookup error:', err);
+            }
+          }
+
+          if (
+            targetMatchDoc &&
+            (targetMatchDoc.status === 'waiting_for_players' || targetMatchDoc.status === 'in_progress')
+          ) {
+            await ensureMatchHydratedFromFirestore(targetMatchDoc.id);
+            const player = authoritativeServerEngine.joinMatch(
+              targetMatchDoc.id,
+              data.requestId,
+              currentUserId,
+              (p.displayName as string) || currentDisplayName
+            );
+            resultData = { matchId: targetMatchDoc.id, player };
+          } else {
+            throw new Error(`Match with access code "${accessCode}" not found or lobby is no longer active.`);
+          }
+        }
         break;
       }
       case 'reconnectPlayer': {

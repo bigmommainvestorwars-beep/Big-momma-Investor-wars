@@ -113,10 +113,11 @@ export function getFirebaseFirestore(): Firestore {
     // Ignore if setLogLevel is unavailable
   }
 
-  const dbId =
-    ENV.firebase.firestoreDatabaseId && ENV.firebase.firestoreDatabaseId !== '(default)'
-      ? ENV.firebase.firestoreDatabaseId
-      : undefined;
+  let rawDbId = (ENV.firebase.firestoreDatabaseId || '').trim();
+  if (rawDbId.startsWith('http://') || rawDbId.startsWith('https://') || rawDbId.includes('firebaseio.com') || rawDbId === '(default)') {
+    rawDbId = '';
+  }
+  const dbId = rawDbId ? rawDbId : undefined;
 
   const firestoreSettings = {
     experimentalAutoDetectLongPolling: true,
