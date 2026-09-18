@@ -13,7 +13,6 @@ import {
   CosmeticItem,
   CosmeticCategory,
 } from './cosmeticsCatalog';
-import { AccountStore } from '../auth/accountStore';
 
 const STORAGE_EQUIPPED_BOARD = 'bm_equipped_board_skin';
 const STORAGE_EQUIPPED_TOKEN = 'bm_equipped_token';
@@ -66,7 +65,6 @@ class CosmeticsManagerClass {
   private saveUnlocked(unlocked: Set<string>): void {
     try {
       localStorage.setItem(STORAGE_UNLOCKED_COSMETICS, JSON.stringify(Array.from(unlocked)));
-      AccountStore.updateCurrentAccount({ unlockedCosmetics: Array.from(unlocked) });
     } catch (e) {
       console.warn('Failed to save unlocked cosmetics to localStorage:', e);
     }
@@ -125,7 +123,6 @@ class CosmeticsManagerClass {
           localStorage.setItem(STORAGE_EQUIPPED_VIGNETTE, itemId);
           break;
       }
-      AccountStore.updateCurrentAccount({ equippedCosmetics: this.getEquippedState() });
       this.notifyListeners();
       return { success: true, message: `Equipped ${item.name} successfully.` };
     } catch (e: any) {

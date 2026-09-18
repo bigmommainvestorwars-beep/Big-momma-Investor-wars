@@ -1,5 +1,3 @@
-import { AccountStore } from '../auth/accountStore';
-
 export type DiceSkinId =
   | 'obsidian-gold'
   | 'neon-cyberpunk'
@@ -248,7 +246,6 @@ export class DiceSkinManager {
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem(STORAGE_EQUIPPED_KEY, skinId);
-        AccountStore.updateCurrentAccount({ equippedDiceSkin: skinId });
       } catch {
         // Ignore
       }
@@ -342,7 +339,6 @@ export class DiceSkinManager {
           STORAGE_UNLOCKED_KEY,
           JSON.stringify(Array.from(unlocked))
         );
-        AccountStore.updateCurrentAccount({ unlockedDiceSkins: Array.from(unlocked) });
       } catch {
         // In-memory unlock succeeded
       }
@@ -362,7 +358,6 @@ export class DiceSkinManager {
           STORAGE_UNLOCKED_KEY,
           JSON.stringify(Array.from(unlocked))
         );
-        AccountStore.updateCurrentAccount({ unlockedDiceSkins: Array.from(unlocked) });
       } catch {
         // Memory delete succeeded
       }

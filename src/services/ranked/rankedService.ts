@@ -4,8 +4,6 @@
  * weekly reward distributions, and global/friends leaderboards.
  */
 
-import { AccountStore } from '../auth/accountStore';
-
 export type RankedTier =
   | 'Bronze'
   | 'Silver'
@@ -187,8 +185,7 @@ export class RankedService {
    */
   public static getProfile(userId: string = 'user_local', displayName: string = 'Player'): PlayerRankedProfile {
     try {
-      const scopedKey = userId ? `bm_ranked_profile_${userId}` : null;
-      const raw = (scopedKey && localStorage.getItem(scopedKey)) || localStorage.getItem(STORAGE_KEY_RANKED_PROFILE);
+      const raw = localStorage.getItem(STORAGE_KEY_RANKED_PROFILE);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed.elo === 'number') {
@@ -213,12 +210,12 @@ export class RankedService {
       elo: defaultElo,
       tier,
       division,
-      matchesPlayed: 0,
-      wins: 0,
-      winStreak: 0,
-      peakElo: defaultElo,
+      matchesPlayed: 8,
+      wins: 5,
+      winStreak: 2,
+      peakElo: 1280,
       syndicateTag: 'APEX',
-      lastMatchTimestamp: Date.now(),
+      lastMatchTimestamp: Date.now() - 3600000,
     };
     this.saveProfile(defaultProfile);
     return defaultProfile;
@@ -227,21 +224,6 @@ export class RankedService {
   public static saveProfile(profile: PlayerRankedProfile): void {
     try {
       localStorage.setItem(STORAGE_KEY_RANKED_PROFILE, JSON.stringify(profile));
-      if (profile.userId) {
-        localStorage.setItem(`bm_ranked_profile_${profile.userId}`, JSON.stringify(profile));
-      }
-      AccountStore.updateCurrentAccount({
-        rankedProfile: {
-          elo: profile.elo,
-          tier: profile.tier,
-          division: profile.division,
-          matchesPlayed: profile.matchesPlayed,
-          wins: profile.wins,
-          winStreak: profile.winStreak,
-          peakElo: profile.peakElo,
-          syndicateTag: profile.syndicateTag,
-        },
-      });
     } catch (e) {
       console.warn('Error saving ranked profile:', e);
     }

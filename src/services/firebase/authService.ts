@@ -181,30 +181,7 @@ class FirebaseAuthService implements IAuthService {
       const user = mapFirebaseUser(credential.user);
       logger.log('security_event', 'info', `User signed in with Google: ${user.uid}`, { userId: user.uid });
       return user;
-    } catch (error: any) {
-      const code = error?.code || '';
-      if (code === 'auth/unauthorized-domain' || error?.message?.includes('unauthorized-domain')) {
-        const domain = typeof window !== 'undefined' ? window.location.hostname : 'preview-domain';
-        const msg = `Domain "${domain}" is not in your Firebase Authorized Domains list. To enable Google Sign-In, add "${domain}" to Firebase Console > Authentication > Settings > Authorized domains.`;
-        errorHandler.capture(new Error(msg), {
-          errorCode: 'AUTH_UNAUTHORIZED_DOMAIN',
-          severity: 'warn',
-          action: 'signInWithGoogle',
-          details: { domain, originalMessage: error?.message },
-        });
-        const customErr = new Error(msg);
-        (customErr as any).code = 'auth/unauthorized-domain';
-        (customErr as any).domain = domain;
-        throw customErr;
-      }
-      if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-        errorHandler.capture(error, {
-          errorCode: 'AUTH_POPUP_CLOSED',
-          severity: 'info',
-          action: 'signInWithGoogle',
-        });
-        throw error;
-      }
+    } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_SIGN_IN_FAILED', action: 'signInWithGoogle' });
       throw error;
     }

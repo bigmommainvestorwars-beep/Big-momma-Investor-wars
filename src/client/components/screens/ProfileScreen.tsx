@@ -14,9 +14,6 @@ import {
   ShieldCheck,
   Crown,
   RotateCcw,
-  Edit2,
-  Save,
-  X,
 } from 'lucide-react';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
@@ -34,10 +31,7 @@ import { ALL_COSMETICS } from '../../../services/cosmetics/cosmeticsCatalog';
 
 export const ProfileScreen: React.FC = () => {
   const { goBack, navigate } = useNavigation();
-  const { user, signOut, updateUsername } = useAuth();
-
-  const [isEditingName, setIsEditingName] = useState(false);
-  const [editedName, setEditedName] = useState(user?.displayName || '');
+  const { user, signOut } = useAuth();
 
   const [equippedSkinId, setEquippedSkinId] = useState<DiceSkinId>(() =>
     DiceSkinManager.getEquippedSkin()
@@ -56,13 +50,6 @@ export const ProfileScreen: React.FC = () => {
   const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   // Subscribe to updates
-  useEffect(() => {
-    if (user) {
-      setRankedProfile(RankedService.getProfile(user.uid, user.displayName || 'Investor'));
-      setEditedName(user.displayName || '');
-    }
-  }, [user?.uid, user?.displayName]);
-
   useEffect(() => {
     const unsubDice = DiceSkinManager.subscribe((newSkin) => {
       setEquippedSkinId(newSkin);
@@ -150,70 +137,19 @@ export const ProfileScreen: React.FC = () => {
           {/* Investor ID & Syndicate Status Card */}
           <div className="bg-slate-900/80 border border-slate-800 rounded-3xl p-6 sm:p-8 flex flex-col sm:flex-row items-center sm:items-start gap-6 shadow-2xl relative overflow-hidden">
             <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-amber-500/20 via-slate-800 to-slate-900 flex items-center justify-center border-2 border-amber-500/40 text-amber-300 text-3xl font-black shadow-lg shrink-0">
-              {user?.displayName?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'I'}
+              {user?.email?.[0]?.toUpperCase() || 'I'}
             </div>
             
             <div className="flex-1 text-center sm:text-left">
-              {isEditingName ? (
-                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-2">
-                  <input
-                    type="text"
-                    value={editedName}
-                    onChange={(e) => setEditedName(e.target.value)}
-                    maxLength={20}
-                    placeholder="New Codename"
-                    autoFocus
-                    className="px-3 py-1.5 bg-slate-950 border border-emerald-500 rounded-xl text-white text-base font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500 max-w-[220px]"
-                  />
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (editedName.trim().length >= 2) {
-                        await updateUsername(editedName.trim());
-                        setIsEditingName(false);
-                        setActionNotice(`Username updated to ${editedName.trim()}!`);
-                        setTimeout(() => setActionNotice(null), 3000);
-                      }
-                    }}
-                    className="p-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl cursor-pointer"
-                    title="Save Username"
-                  >
-                    <Save className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditedName(user?.displayName || '');
-                      setIsEditingName(false);
-                    }}
-                    className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl cursor-pointer"
-                    title="Cancel"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                  <h2 className="text-2xl font-bold text-slate-100">
-                    {user?.displayName || 'Elite Investor'}
-                  </h2>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditedName(user?.displayName || '');
-                      setIsEditingName(true);
-                    }}
-                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
-                    title="Edit Username"
-                  >
-                    <Edit2 className="w-3.5 h-3.5" />
-                  </button>
-                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-mono font-bold flex items-center gap-1">
-                    <Crown className="w-3 h-3 text-amber-400" />
-                    VIP High-Roller
-                  </span>
-                </div>
-              )}
+              <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
+                <h2 className="text-2xl font-bold text-slate-100">
+                  {user?.displayName || 'Elite Investor'}
+                </h2>
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-mono font-bold flex items-center gap-1">
+                  <Crown className="w-3 h-3 text-amber-400" />
+                  VIP High-Roller
+                </span>
+              </div>
               
               <div className="text-sm text-slate-400 font-mono mt-1">{user?.email || 'guest@investor.syndicate'}</div>
 

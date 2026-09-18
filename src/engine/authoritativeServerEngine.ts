@@ -12,17 +12,6 @@ import {
   FirestoreLogDoc,
   matchSyncService,
 } from '../services/firebase/matchSyncService';
-import { getFirebaseFirestore } from '../services/firebase/config';
-import {
-  doc,
-  setDoc,
-  getDoc,
-  getDocs,
-  collection,
-  query,
-  where,
-  limit,
-} from 'firebase/firestore';
 import { DEFAULT_STANDARD_SPACES } from '../config/boardConfig';
 import { BoardSpace } from '../types/board';
 import { BotDecisionService } from '../bot/botDecisionService';
@@ -82,111 +71,6 @@ export class AuthoritativeServerEngine {
       };
     });
     matchSyncService.registerLocalOpenMatchesProvider(() => this.getOpenMatches());
-    matchSyncService.registerRemoteSyncHandler((type, matchId, data) => {
-      if (type === 'match') {
-        this.syncFromRemoteMatch(data);
-      } else if (type === 'players') {
-        this.syncFromRemotePlayers(matchId, data);
-      }
-    });
-  }
-
-  public syncFromRemoteMatch(remoteMatch: FirestoreMatchDoc): void {
-    let container = this.matches.get(remoteMatch.id);
-    if (!container) {
-      container = {
-        match: remoteMatch,
-        players: new Map(),
-        logs: [],
-        activeAuction: null,
-        activeModifiers: [],
-      };
-      this.matches.set(remoteMatch.id, container);
-    } else {
-      if (remoteMatch.stateVersion >= container.match.stateVersion) {
-        container.match = { ...container.match, ...remoteMatch };
-      }
-    }
-  }
-
-  public syncFromRemotePlayers(matchId: string, remotePlayers: FirestorePlayerDoc[]): void {
-    let container = this.matches.get(matchId);
-    if (!container) {
-      container = {
-        match: {
-          id: matchId,
-          hostUserId: remotePlayers[0]?.userId || '',
-          boardId: 'default-standard-board',
-          rulesetVersion: '1.0.0',
-          status: 'waiting_for_players',
-          currentPhase: 'TURN_START',
-          currentPlayerId: remotePlayers[0]?.id || null,
-          turnNumber: 1,
-          roundNumber: 1,
-          stateVersion: 1,
-          participantUserIds: remotePlayers.map((p) => p.userId),
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-        players: new Map(),
-        logs: [],
-        activeAuction: null,
-      };
-      this.matches.set(matchId, container);
-    }
-    for (const p of remotePlayers) {
-      container.players.set(p.id, { ...p });
-    }
-  }
-
-  private async persistToFirestore(container: AuthoritativeMatchContainer): Promise<void> {
-    const db = getFirebaseFirestore();
-    if (!db) return;
-
-    try {
-      const matchRef = doc(db, 'matches', container.match.id);
-      await setDoc(matchRef, { ...container.match }, { merge: true });
-
-      // Persist players
-      const playerPromises = Array.from(container.players.values()).map((p) => {
-        const pRef = doc(db, 'matches', container.match.id, 'players', p.id);
-        return setDoc(pRef, { ...p }, { merge: true });
-      });
-      await Promise.all(playerPromises);
-
-      // Persist latest log if present
-      if (container.logs.length > 0) {
-        const latestLog = container.logs[0];
-        const lRef = doc(db, 'matches', container.match.id, 'logs', latestLog.id);
-        await setDoc(lRef, { ...latestLog }, { merge: true });
-      }
-
-      // Persist active auction if present
-      if (container.activeAuction) {
-        const aRef = doc(db, 'matches', container.match.id, 'auctions', container.activeAuction.id);
-        await setDoc(aRef, { ...container.activeAuction }, { merge: true });
-      }
-
-      // Maintain direct room_codes registry for fast O(1) code resolution across clients
-      if (container.match.accessCode) {
-        const rawCode = container.match.accessCode.trim().toUpperCase();
-        const codeOnly = rawCode.replace(/^BM-/, '');
-        const withPrefix = rawCode.startsWith('BM-') ? rawCode : `BM-${rawCode}`;
-        const codeEntry = {
-          matchId: container.match.id,
-          accessCode: withPrefix,
-          codeOnly,
-          status: container.match.status,
-          isPrivate: container.match.isPrivate ?? false,
-          updatedAt: Date.now(),
-        };
-        setDoc(doc(db, 'room_codes', rawCode), codeEntry, { merge: true }).catch(() => {});
-        setDoc(doc(db, 'room_codes', withPrefix), codeEntry, { merge: true }).catch(() => {});
-        setDoc(doc(db, 'room_codes', codeOnly), codeEntry, { merge: true }).catch(() => {});
-      }
-    } catch (err) {
-      console.warn('Firestore match persist notice:', err);
-    }
   }
 
   public getOpenMatches(): FirestoreMatchDoc[] {
@@ -243,11 +127,6 @@ export class AuthoritativeServerEngine {
       container.pendingMarketChoice,
       container.activeMarketEvent
     );
-
-    // Asynchronously persist state to Firestore for remote multiplayer sync
-    this.persistToFirestore(container).catch((err) => {
-      console.warn('Firestore match persist notice:', err);
-    });
   }
 
   private assertMatchActive(match: FirestoreMatchDoc): void {
@@ -582,23 +461,14 @@ export class AuthoritativeServerEngine {
   /**
    * 3f. findOrCreateQuickMatch
    * Resolves quick-match queue by joining the first open public lobby or creating a new one.
-   * When autoFillBots is enabled (default true), automatically fills remaining seats with AI bots and starts the match.
    */
-  public async findOrCreateQuickMatch(
+  public findOrCreateQuickMatch(
     requestId: string,
     userId: string,
     displayName: string,
-    options?: { isPrivate?: boolean; accessCode?: string; autoFillBots?: boolean }
-  ): Promise<{ matchId: string; isNew: boolean; accessCode: string; player: FirestorePlayerDoc; isStarted?: boolean }> {
-    const shouldAutoFill = options?.autoFillBots !== false;
-    const botProfiles = [
-      { name: 'Apex Capital (AI)', personality: 'aggressive' },
-      { name: 'Venture Bot (AI)', personality: 'balanced' },
-      { name: 'Bullish Quant (AI)', personality: 'tactical' },
-      { name: 'Silicon Syndicate (AI)', personality: 'opportunistic' },
-    ];
-
-    // 1. Check for open public lobby in memory if not private
+    options?: { isPrivate?: boolean; accessCode?: string }
+  ): { matchId: string; isNew: boolean; accessCode: string; player: FirestorePlayerDoc } {
+    // 1. Check for open public lobby if not private
     if (!options?.isPrivate) {
       for (const [id, container] of this.matches.entries()) {
         if (
@@ -607,93 +477,12 @@ export class AuthoritativeServerEngine {
           container.players.size < 4
         ) {
           const player = this.joinMatch(id, requestId, userId, displayName);
-          
-          // If autoFill is requested and match has open seats, fill remaining
-          if (shouldAutoFill) {
-            let botIdx = 0;
-            while (container.players.size < 4 && botIdx < botProfiles.length) {
-              const profile = botProfiles[botIdx % botProfiles.length];
-              this.addBotPlayer(id, `req_fill_bot_${Date.now()}_${botIdx}`, profile.name, profile.personality);
-              botIdx++;
-            }
-            if (container.players.size >= 2) {
-              this.startMatch(id, `start_qm_${Date.now()}`);
-            }
-          }
-
           return {
             matchId: id,
             isNew: false,
             accessCode: container.match.accessCode || id.slice(-6).toUpperCase(),
             player,
-            isStarted: (container.match.status as string) === 'in_progress',
           };
-        }
-      }
-
-      // Check Firestore for open public lobby
-      const db = getFirebaseFirestore();
-      if (db) {
-        try {
-          const matchesRef = collection(db, 'matches');
-          // Use single-field query to avoid missing composite index errors on Firestore
-          const q = query(
-            matchesRef,
-            where('status', '==', 'waiting_for_players'),
-            limit(15)
-          );
-          const snap = await getDocs(q);
-
-          for (const docSnap of snap.docs) {
-            const matchData = { id: docSnap.id, ...docSnap.data() } as FirestoreMatchDoc;
-            // In-memory filter for public lobbies and capacity
-            if (
-              !matchData.isPrivate &&
-              (matchData.participantUserIds || []).length < 4 &&
-              matchData.hostUserId !== userId
-            ) {
-              const playersRef = collection(db, 'matches', matchData.id, 'players');
-              const playersSnap = await getDocs(playersRef);
-              const playersMap = new Map<string, FirestorePlayerDoc>();
-
-              for (const pDoc of playersSnap.docs) {
-                playersMap.set(pDoc.id, { id: pDoc.id, ...pDoc.data() } as FirestorePlayerDoc);
-              }
-
-              const container: AuthoritativeMatchContainer = {
-                match: matchData,
-                players: playersMap,
-                logs: [],
-                activeAuction: null,
-                activeModifiers: [],
-              };
-              this.matches.set(matchData.id, container);
-
-              const player = this.joinMatch(matchData.id, requestId, userId, displayName);
-
-              if (shouldAutoFill) {
-                let botIdx = 0;
-                while (container.players.size < 4 && botIdx < botProfiles.length) {
-                  const profile = botProfiles[botIdx % botProfiles.length];
-                  this.addBotPlayer(matchData.id, `req_fill_bot_${Date.now()}_${botIdx}`, profile.name, profile.personality);
-                  botIdx++;
-                }
-                if (container.match.status === 'waiting_for_players' && container.players.size >= 2) {
-                  this.startMatch(matchData.id, `start_qm_${Date.now()}`);
-                }
-              }
-
-              return {
-                matchId: matchData.id,
-                isNew: false,
-                accessCode: matchData.accessCode || matchData.id.slice(-6).toUpperCase(),
-                player,
-                isStarted: container.match.status === 'in_progress',
-              };
-            }
-          }
-        } catch (err) {
-          console.warn('Firestore quick-match query notice:', err);
         }
       }
     }
@@ -715,138 +504,39 @@ export class AuthoritativeServerEngine {
 
     const container = this.matches.get(newMatchId)!;
     const player = container.players.get(userId)!;
-
-    // Automatically fill the remaining 3 seats with AI bots if shouldAutoFill is true
-    if (shouldAutoFill) {
-      for (let i = 0; i < 3; i++) {
-        const profile = botProfiles[i % botProfiles.length];
-        this.addBotPlayer(newMatchId, `req_bot_fill_${Date.now()}_${i}`, profile.name, profile.personality);
-      }
-      // Start the match immediately so players jump straight into action
-      this.startMatch(newMatchId, `start_qm_${Date.now()}`);
-    }
-
     return {
       matchId: newMatchId,
       isNew: true,
       accessCode,
       player,
-      isStarted: container.match.status === 'in_progress',
     };
   }
 
   /**
    * 3g. joinMatchByAccessCode
-   * Allows joining private or public lobbies via 4-6 character access code or match ID.
-   * Multi-format resolution: handles 'BM-XXXX', 'XXXX', lowercase, and direct IDs.
+   * Allows joining private or public lobbies via 6-character access code or match ID.
    */
-  public async joinMatchByAccessCode(
+  public joinMatchByAccessCode(
     accessCode: string,
     requestId: string,
     userId: string,
     displayName: string
-  ): Promise<{ matchId: string; player: FirestorePlayerDoc }> {
-    const raw = accessCode.trim().toUpperCase();
-    const cleanWithBM = raw.startsWith('BM-') ? raw : `BM-${raw}`;
-    const cleanWithoutBM = raw.replace(/^BM-/, '');
-    const candidateCodes = Array.from(new Set([raw, cleanWithBM, cleanWithoutBM]));
-
-    // 1. Check local in-memory matches first
+  ): { matchId: string; player: FirestorePlayerDoc } {
+    const cleanCode = accessCode.trim().toUpperCase();
     for (const [id, container] of this.matches.entries()) {
       const matchCode = (container.match.accessCode || '').toUpperCase();
       const matchIdClean = id.toUpperCase();
-      const matchesCandidate =
-        candidateCodes.includes(matchCode) ||
-        candidateCodes.includes(matchCode.replace(/^BM-/, '')) ||
-        matchIdClean === raw;
-
-      if (matchesCandidate && container.match.status === 'waiting_for_players') {
+      if (
+        (matchCode === cleanCode || matchIdClean === cleanCode) &&
+        container.match.status === 'waiting_for_players'
+      ) {
         const player = this.joinMatch(id, requestId, userId, displayName);
         return { matchId: id, player };
       }
     }
-
-    // 2. Query Firestore with multi-tier resolution
-    const db = getFirebaseFirestore();
-    if (db) {
-      try {
-        let resolvedMatchId: string | null = null;
-
-        // Tier A: Check direct O(1) room_codes collection
-        for (const candidate of candidateCodes) {
-          const codeSnap = await getDoc(doc(db, 'room_codes', candidate));
-          if (codeSnap.exists()) {
-            const data = codeSnap.data();
-            if (data?.matchId) {
-              resolvedMatchId = data.matchId;
-              break;
-            }
-          }
-        }
-
-        // Tier B: Direct matches/{matchId} lookup
-        if (!resolvedMatchId) {
-          const directDoc = await getDoc(doc(db, 'matches', raw));
-          if (directDoc.exists()) {
-            resolvedMatchId = directDoc.id;
-          }
-        }
-
-        // Tier C: Query matches collection for accessCode field
-        if (!resolvedMatchId) {
-          const matchesRef = collection(db, 'matches');
-          for (const candidate of candidateCodes) {
-            const q = query(matchesRef, where('accessCode', '==', candidate), limit(1));
-            const snap = await getDocs(q);
-            if (!snap.empty) {
-              resolvedMatchId = snap.docs[0].id;
-              break;
-            }
-          }
-        }
-
-        // Hydrate match and join if match found
-        if (resolvedMatchId) {
-          const matchDocSnap = await getDoc(doc(db, 'matches', resolvedMatchId));
-          if (matchDocSnap.exists()) {
-            const matchData = { id: matchDocSnap.id, ...matchDocSnap.data() } as FirestoreMatchDoc;
-            if (matchData.status === 'waiting_for_players') {
-              const playersRef = collection(db, 'matches', matchData.id, 'players');
-              const playersSnap = await getDocs(playersRef);
-              const playersMap = new Map<string, FirestorePlayerDoc>();
-
-              for (const pDoc of playersSnap.docs) {
-                playersMap.set(pDoc.id, { id: pDoc.id, ...pDoc.data() } as FirestorePlayerDoc);
-              }
-
-              const container: AuthoritativeMatchContainer = {
-                match: matchData,
-                players: playersMap,
-                logs: [],
-                activeAuction: null,
-                activeModifiers: [],
-              };
-              this.matches.set(matchData.id, container);
-
-              const player = this.joinMatch(matchData.id, requestId, userId, displayName);
-              return { matchId: matchData.id, player };
-            } else {
-              throw new ServerFunctionError(
-                SERVER_ERROR_CODES.INVALID_STATE_TRANSITION,
-                `The room for code "${accessCode}" has already started or ended.`
-              );
-            }
-          }
-        }
-      } catch (err) {
-        if (err instanceof ServerFunctionError) throw err;
-        console.warn('Firestore room code lookup notice:', err);
-      }
-    }
-
     throw new ServerFunctionError(
       SERVER_ERROR_CODES.MATCH_NOT_FOUND,
-      `No open lobby found for room code "${accessCode}". Please check the code and try again.`
+      `No open lobby found for match code "${accessCode}".`
     );
   }
 

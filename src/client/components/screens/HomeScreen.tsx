@@ -42,23 +42,15 @@ export const HomeScreen: React.FC = () => {
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [showCodeInput, setShowCodeInput] = useState(false);
   const [isJoiningCode, setIsJoiningCode] = useState(false);
-  const [isHosting, setIsHosting] = useState(false);
-  const [isQueueing, setIsQueueing] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleQuickMatch = async () => {
-    setIsQueueing(true);
-    setActionError(null);
     try {
       await startQuickMatchQueue();
-      // Auto-transitions straight into active gameplay with automated bot roster
-      navigate('GAMEPLAY');
+      // Auto-transitions to GAMEPLAY or LOBBY once state updates
+      navigate('LOBBY');
     } catch (err: any) {
       console.warn('Quick Match queue error:', err);
-      setActionError(err?.message || 'Matchmaking error. Please try again.');
-    } finally {
-      setIsQueueing(false);
     }
   };
 
@@ -67,7 +59,6 @@ export const HomeScreen: React.FC = () => {
     if (!roomCodeInput.trim()) return;
     setIsJoiningCode(true);
     setCodeError(null);
-    setActionError(null);
     try {
       await joinByRoomCode(roomCodeInput.trim().toUpperCase());
       navigate('LOBBY');
@@ -79,16 +70,11 @@ export const HomeScreen: React.FC = () => {
   };
 
   const handleHostPrivate = async () => {
-    setIsHosting(true);
-    setActionError(null);
     try {
       await createPrivateMatch();
       navigate('LOBBY');
     } catch (err: any) {
       console.warn('Host private match error:', err);
-      setActionError(err?.message || 'Failed to create private lobby.');
-    } finally {
-      setIsHosting(false);
     }
   };
 
@@ -161,24 +147,19 @@ export const HomeScreen: React.FC = () => {
           <button
             id="quick-match-btn"
             onClick={handleQuickMatch}
-            disabled={isQueueing || isHosting || isJoiningCode}
-            className="w-full py-4 px-5 rounded-2xl flex items-center justify-between bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 disabled:opacity-50 text-white shadow-xl shadow-emerald-950/60 transition-all text-sm font-black tracking-widest uppercase active:scale-98 cursor-pointer border border-emerald-400/30"
+            className="w-full py-4 px-5 rounded-2xl flex items-center justify-between bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-xl shadow-emerald-950/60 transition-all text-sm font-black tracking-widest uppercase active:scale-98 cursor-pointer border border-emerald-400/30"
           >
             <div className="flex items-center gap-3">
-              {isQueueing ? (
-                <RefreshCw className="w-5 h-5 text-yellow-300 animate-spin" />
-              ) : (
-                <Zap className="w-5 h-5 fill-current text-yellow-300" />
-              )}
+              <Zap className="w-5 h-5 fill-current text-yellow-300" />
               <div className="text-left">
-                <div>{isQueueing ? 'Searching Match...' : 'Quick Match'}</div>
+                <div>Quick Match</div>
                 <div className="text-[10px] font-mono font-normal opacity-85 lowercase tracking-normal">
                   matchmaking queue • 4 investors
                 </div>
               </div>
             </div>
             <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-black/30 border border-white/10 uppercase">
-              {isQueueing ? 'QUEUE' : 'START'}
+              Queue
             </span>
           </button>
 
@@ -212,7 +193,7 @@ export const HomeScreen: React.FC = () => {
                   <input
                     id="match-access-code-input"
                     type="text"
-                    placeholder="e.g. BM-9K2F or 9K2F"
+                    placeholder="e.g. BM-9K2F"
                     value={roomCodeInput}
                     onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
                     maxLength={10}
@@ -241,26 +222,14 @@ export const HomeScreen: React.FC = () => {
           <button
             id="host-private-lobby-btn"
             onClick={handleHostPrivate}
-            disabled={isHosting || isQueueing || isJoiningCode}
-            className="w-full py-3 px-4 rounded-xl flex items-center justify-between bg-slate-900/60 hover:bg-slate-800/80 disabled:opacity-50 text-slate-300 hover:text-white transition-all text-xs font-bold tracking-wider uppercase text-left border border-slate-800 hover:border-slate-700 cursor-pointer"
+            className="w-full py-3 px-4 rounded-xl flex items-center justify-between bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white transition-all text-xs font-bold tracking-wider uppercase text-left border border-slate-800 hover:border-slate-700 cursor-pointer"
           >
             <div className="flex items-center gap-2.5">
-              {isHosting ? (
-                <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
-              ) : (
-                <PlusCircle className="w-4 h-4 text-emerald-400" />
-              )}
-              <span>{isHosting ? 'Creating Private Lobby...' : 'Host Private Lobby'}</span>
+              <PlusCircle className="w-4 h-4 text-emerald-400" />
+              <span>Host Private Lobby</span>
             </div>
             <span className="text-[10px] font-mono text-slate-500">CUSTOM</span>
           </button>
-
-          {actionError && (
-            <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-500/30 text-[11px] font-mono text-rose-300 flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>{actionError}</span>
-            </div>
-          )}
 
           {/* Solo / Bot Simulation Setup */}
           <button
@@ -344,25 +313,19 @@ export const HomeScreen: React.FC = () => {
         {/* Footer info & sign out */}
         <div className="p-4 border-t border-slate-800/80">
           <div className="flex items-center justify-between">
-            <div
-              onClick={() => navigate('PROFILE')}
-              className="flex items-center gap-2.5 truncate cursor-pointer group"
-              title="View Profile and Change Username"
-            >
-              <div className="w-8 h-8 rounded-xl bg-slate-800 group-hover:bg-slate-700 flex items-center justify-center text-slate-300 text-xs font-bold shrink-0 border border-slate-700 transition-colors">
-                {user?.displayName?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
+            <div className="flex items-center gap-2.5 truncate">
+              <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-400 text-xs font-bold shrink-0 border border-slate-700">
+                {user?.email?.[0]?.toUpperCase() || 'U'}
               </div>
               <div className="truncate">
-                <div className="text-xs text-slate-300 group-hover:text-emerald-300 font-semibold truncate transition-colors">
-                  {user?.displayName || user?.email}
-                </div>
-                <div className="text-[10px] text-slate-500 font-mono">Investor Profile</div>
+                <div className="text-xs text-slate-300 font-semibold truncate">{user?.displayName || user?.email}</div>
+                <div className="text-[10px] text-slate-500 font-mono">Mobile Handshake V3</div>
               </div>
             </div>
             <button
               onClick={signOut}
-              className="p-2 text-slate-500 hover:text-rose-400 shrink-0 cursor-pointer rounded-lg hover:bg-slate-900 transition-colors"
-              title="Sign Out / Switch Identity"
+              className="p-2 text-slate-500 hover:text-slate-300 shrink-0 cursor-pointer rounded-lg hover:bg-slate-900"
+              title="Sign Out"
             >
               <LogOut className="w-4 h-4" />
             </button>

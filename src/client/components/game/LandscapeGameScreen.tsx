@@ -162,13 +162,9 @@ export const LandscapeGameScreen: React.FC = () => {
   const selectedSpace = DEFAULT_STANDARD_SPACES[selectedSpaceIndex] || DEFAULT_STANDARD_SPACES[0];
 
   // Identify Human vs Current Active player
-  const humanPlayer =
-    players.find((p) => user?.uid && (p.userId === user.uid || p.id === user.uid)) ||
-    players.find((p) => !p.isBot) ||
-    players[0] ||
-    null;
+  const humanPlayer = players.find((p) => !p.isBot) || players[0] || null;
   const currentPlayer = players.find((p) => p.id === match?.currentPlayerId) || null;
-  const isHumanTurn = Boolean(currentPlayer && humanPlayer && currentPlayer.id === humanPlayer.id);
+  const isHumanTurn = Boolean(currentPlayer && !currentPlayer.isBot);
 
   // Phase analysis
   const currentPhase = match?.currentPhase || 'TURN_START';
@@ -203,13 +199,10 @@ export const LandscapeGameScreen: React.FC = () => {
     }
   }, [isHumanTurn, currentPhase, isRolling, pendingMovement]);
 
-  // Autonomous Bot Runner Loop (Only Host triggers bot turns to prevent multi-client collision)
+  // Autonomous Bot Runner Loop
   useEffect(() => {
     if (!autoPlayBots || !match || match.status !== 'in_progress') return;
     if (!currentPlayer || !currentPlayer.isBot) return;
-
-    const isHost = !match.hostUserId || match.hostUserId === user?.uid || match.hostUserId === humanPlayer?.userId;
-    if (!isHost) return;
 
     const timer = setTimeout(async () => {
       try {
@@ -220,7 +213,7 @@ export const LandscapeGameScreen: React.FC = () => {
     }, botSpeedMs);
 
     return () => clearTimeout(timer);
-  }, [autoPlayBots, match?.status, match?.hostUserId, user?.uid, humanPlayer?.userId, currentPlayer?.id, currentPlayer?.isBot, match?.currentPhase, botSpeedMs]);
+  }, [autoPlayBots, match?.status, currentPlayer?.id, currentPlayer?.isBot, match?.currentPhase, botSpeedMs]);
 
   // Push Notification Triggers: Your Turn Alert
   const lastNotifiedTurnRef = useRef<number>(-1);
@@ -690,16 +683,8 @@ export const LandscapeGameScreen: React.FC = () => {
                     Action Terminal
                   </h3>
                 </div>
-                <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${
-                  isHumanTurn
-                    ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60 font-bold animate-pulse'
-                    : 'bg-slate-800 text-slate-400'
-                }`}>
-                  {isHumanTurn
-                    ? 'Your Active Turn'
-                    : currentPlayer?.isBot
-                    ? `Bot: ${currentPlayer.displayName}`
-                    : `Waiting for ${currentPlayer?.displayName || 'Player'}`}
+                <span className="text-[10px] font-mono text-slate-400">
+                  {isHumanTurn ? 'Your Active Turn' : 'Autonomous Bot Turn'}
                 </span>
               </div>
 
@@ -711,15 +696,7 @@ export const LandscapeGameScreen: React.FC = () => {
                   canRoll={canRoll}
                   onRoll={handleRollDice}
                   onAnimationComplete={handleDiceAnimationComplete}
-                  disabledReason={
-                    !isHumanTurn
-                      ? currentPlayer?.isBot
-                        ? `Waiting for ${currentPlayer.displayName} (Bot)`
-                        : `Waiting for ${currentPlayer?.displayName || 'Opponent'}`
-                      : currentPhase !== 'TURN_START'
-                      ? 'Turn in progress'
-                      : undefined
-                  }
+                  disabledReason={!isHumanTurn ? 'Waiting for Bot' : currentPhase !== 'TURN_START' ? 'Turn in progress' : undefined}
                   initialMaterial="glossy-plastic"
                   equippedSkin={equippedSkin}
                   onSkinChange={(skin) => DiceSkinManager.setEquippedSkin(skin)}

@@ -56,7 +56,7 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
   // Root Navigation Controller (Auth & Active Match observer)
   useEffect(() => {
     // 1. Initial boot / splash logic
-    if (isAuthLoading) {
+    if (isAuthLoading || !isFirebaseConfigured) {
       if (currentScreen !== 'SPLASH') navigate('SPLASH');
       return;
     }
@@ -71,11 +71,10 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
       return;
     }
 
-    // 3. Authenticated logic on initial SPLASH mount
+    // 3. Authenticated logic
     if (user && currentScreen === 'SPLASH') {
-      // Check if we have a persisted active match from storage or memory
-      const persistedMatchId = activeMatchId || (typeof window !== 'undefined' ? localStorage.getItem('bigmomma_active_match_id') : null);
-      if (persistedMatchId && match) {
+      // Check if we have an active match
+      if (activeMatchId && match) {
         if (match.status === 'completed') {
           setHistory(['HOME', 'GAME_OVER']);
         } else if (match.status === 'waiting_for_players') {
@@ -88,13 +87,16 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
       }
     }
     
-    // 4. Force transitions based on authoritative match state
+    // 4. Force transitions based on authoritative match state if we are in game flow
     if (activeMatchId && match) {
       if (match.status === 'completed' && currentScreen !== 'GAME_OVER' && currentScreen !== 'RESULTS') {
         navigate('GAME_OVER');
       } else if (match.status === 'in_progress' && (currentScreen === 'LOBBY' || currentScreen === 'MATCH_SETUP')) {
         navigate('GAMEPLAY');
       }
+    } else if (!activeMatchId && currentScreen === 'GAMEPLAY') {
+      // Match was destroyed or left while actively in gameplay
+      setHistory(['HOME']);
     }
 
   }, [user, isFirebaseConfigured, isAuthLoading, activeMatchId, match?.status, currentScreen, navigate]);

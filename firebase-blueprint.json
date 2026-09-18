@@ -218,17 +218,6 @@
         "endsAt": { "type": "number", "required": true },
         "nextWeeklyDistributionAt": { "type": "number", "required": true }
       }
-    },
-    "roomCodes": {
-      "collectionName": "room_codes",
-      "description": "Direct index-free lookup mapping access codes to match IDs",
-      "fields": {
-        "accessCode": { "type": "string", "required": true },
-        "matchId": { "type": "string", "required": true },
-        "codeOnly": { "type": "string", "required": true },
-        "status": { "type": "string", "required": true },
-        "createdAt": { "type": "number", "required": true }
-      }
     }
   }
 }

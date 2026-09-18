@@ -70,29 +70,19 @@ export function getFirebaseApp(): FirebaseApp {
 
   const validation = validateFirebaseClientConfig(ENV);
   if (!validation.valid) {
-    console.warn(`[Firebase Client] Config notice:\n${validation.errors.join('\n')}`);
+    throw new Error(`Firebase Client Initialization Failed:\n${validation.errors.join('\n')}`);
   }
 
   const firebaseConfig = {
-    apiKey: ENV.firebase.apiKey || 'AIzaSyDdLO6HFKpBVLeOZcZcftKR1g23v1ZBzl4',
-    authDomain: ENV.firebase.authDomain || 'bigmomma-investor-wars.firebaseapp.com',
-    projectId: ENV.firebase.projectId || 'bigmomma-investor-wars',
-    storageBucket: ENV.firebase.storageBucket || 'bigmomma-investor-wars.firebasestorage.app',
-    messagingSenderId: ENV.firebase.messagingSenderId || '665313671823',
-    appId: ENV.firebase.appId || '1:665313671823:web:34d97c37f49f013d2d0efa',
+    apiKey: ENV.firebase.apiKey,
+    authDomain: ENV.firebase.authDomain,
+    projectId: ENV.firebase.projectId,
+    storageBucket: ENV.firebase.storageBucket,
+    messagingSenderId: ENV.firebase.messagingSenderId,
+    appId: ENV.firebase.appId,
   };
 
-  try {
-    cachedApp = initializeApp(firebaseConfig);
-  } catch (err) {
-    const apps = getApps();
-    if (apps.length > 0) {
-      cachedApp = apps[0];
-    } else {
-      console.error('[Firebase Client] Initialization error, falling back:', err);
-      cachedApp = initializeApp(firebaseConfig, `client-${Date.now()}`);
-    }
-  }
+  cachedApp = initializeApp(firebaseConfig);
   return cachedApp;
 }
 

@@ -96,17 +96,6 @@ export class MatchSyncService {
     activeMarketEvent?: MarketEvent | null;
   } | undefined;
   private localOpenMatchesProvider?: () => FirestoreMatchDoc[];
-  private remoteSyncHandler?: (
-    type: 'match' | 'players' | 'auction' | 'logs',
-    matchId: string,
-    data: any
-  ) => void;
-
-  public registerRemoteSyncHandler(
-    handler: (type: 'match' | 'players' | 'auction' | 'logs', matchId: string, data: any) => void
-  ): void {
-    this.remoteSyncHandler = handler;
-  }
 
   public registerLocalContainerProvider(
     provider: (matchId: string) => {
@@ -239,6 +228,10 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData({ ...local.match });
+        // Local authoritative match: state is purely driven by local engine events
+        return () => {
+          this.matchListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -251,9 +244,7 @@ export class MatchSyncService {
         matchRef,
         (snap) => {
           if (snap.exists()) {
-            const matchDoc = { id: snap.id, ...snap.data() } as FirestoreMatchDoc;
-            onData(matchDoc);
-            this.remoteSyncHandler?.('match', matchId, matchDoc);
+            onData({ id: snap.id, ...snap.data() } as FirestoreMatchDoc);
           }
         },
         (err) => {
@@ -287,6 +278,9 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.players]);
+        return () => {
+          this.playersListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -301,7 +295,6 @@ export class MatchSyncService {
           const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
           players.sort((a, b) => a.turnOrder - b.turnOrder);
           onData(players);
-          this.remoteSyncHandler?.('players', matchId, players);
         },
         (err) => {
           if (onError) onError(err);
@@ -334,6 +327,9 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.logs]);
+        return () => {
+          this.logsListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -350,7 +346,6 @@ export class MatchSyncService {
         (snap) => {
           const logs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
           onData(logs);
-          this.remoteSyncHandler?.('logs', matchId, logs);
         },
         (err) => {
           const isIndexMissing = (err as any)?.code === 'failed-precondition' || err?.message?.includes('index');
@@ -402,6 +397,9 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeAuction ? { ...local.activeAuction } : null);
+        return () => {
+          this.auctionListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -417,12 +415,9 @@ export class MatchSyncService {
         (snap) => {
           if (!snap.empty) {
             const docSnap = snap.docs[0];
-            const auctionDoc = { id: docSnap.id, ...docSnap.data() } as FirestoreAuctionDoc;
-            onData(auctionDoc);
-            this.remoteSyncHandler?.('auction', matchId, auctionDoc);
+            onData({ id: docSnap.id, ...docSnap.data() } as FirestoreAuctionDoc);
           } else {
             onData(null);
-            this.remoteSyncHandler?.('auction', matchId, null);
           }
         },
         (err) => {
@@ -515,6 +510,9 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.pendingChoice ? { ...local.pendingChoice } : null);
+        return () => {
+          this.pendingChoiceListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -563,6 +561,9 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeMarketEvent ? { ...local.activeMarketEvent } : null);
+        return () => {
+          this.marketEventListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
