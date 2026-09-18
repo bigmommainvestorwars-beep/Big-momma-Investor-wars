@@ -12,8 +12,9 @@ import {
   orderBy,
   limit,
   Unsubscribe,
+  Firestore,
 } from 'firebase/firestore';
-import { getFirebaseFirestore } from './config';
+import { getFirebaseFirestore, isFirebaseConfigured } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
 import { PendingMarketChoiceDoc, MarketEvent } from '../../types/marketEvent';
 
@@ -210,6 +211,15 @@ export class MatchSyncService {
     }
   }
 
+  private getSafeDb(): Firestore | null {
+    if (!isFirebaseConfigured()) return null;
+    try {
+      return getFirebaseFirestore();
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Subscribe to match document
    */
@@ -235,7 +245,7 @@ export class MatchSyncService {
       }
     }
 
-    const db = getFirebaseFirestore();
+    const db = this.getSafeDb();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -284,7 +294,7 @@ export class MatchSyncService {
       }
     }
 
-    const db = getFirebaseFirestore();
+    const db = this.getSafeDb();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -333,7 +343,7 @@ export class MatchSyncService {
       }
     }
 
-    const db = getFirebaseFirestore();
+    const db = this.getSafeDb();
     let fsUnsub: Unsubscribe = () => {};
     let fallbackUnsub: Unsubscribe = () => {};
 
@@ -403,7 +413,7 @@ export class MatchSyncService {
       }
     }
 
-    const db = getFirebaseFirestore();
+    const db = this.getSafeDb();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -453,7 +463,7 @@ export class MatchSyncService {
       }
     }
 
-    const db = getFirebaseFirestore();
+    const db = this.getSafeDb();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -516,7 +526,7 @@ export class MatchSyncService {
       }
     }
 
-    const db = getFirebaseFirestore();
+    const db = this.getSafeDb();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -567,7 +577,7 @@ export class MatchSyncService {
       }
     }
 
-    const db = getFirebaseFirestore();
+    const db = this.getSafeDb();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {

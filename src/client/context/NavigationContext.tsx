@@ -31,7 +31,7 @@ interface NavigationContextValue {
 const NavigationContext = createContext<NavigationContextValue | null>(null);
 
 export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  const { user, isFirebaseConfigured, isLoading: isAuthLoading } = useAuth();
+  const { user, isFirebaseConfigured, isLoading: isAuthLoading, isLocalTestMode } = useAuth();
   const { match, activeMatchId } = useGame();
   
   const [history, setHistory] = useState<Screen[]>(['SPLASH']);
@@ -56,7 +56,7 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
   // Root Navigation Controller (Auth & Active Match observer)
   useEffect(() => {
     // 1. Initial boot / splash logic
-    if (isAuthLoading || !isFirebaseConfigured) {
+    if (isAuthLoading || (!isFirebaseConfigured && !isLocalTestMode)) {
       if (currentScreen !== 'SPLASH') navigate('SPLASH');
       return;
     }

@@ -4,6 +4,7 @@
  */
 
 import React from 'react';
+import { ErrorBoundary } from './client/components/ErrorBoundary';
 import { AuthProvider } from './client/context/AuthContext';
 import { GameProvider } from './client/context/GameContext';
 import { NavigationProvider } from './client/context/NavigationContext';
@@ -11,12 +12,14 @@ import { AppRouter } from './client/components/navigation/AppRouter';
 
 export default function App() {
   return (
-    <AuthProvider>
-      <GameProvider>
-        <NavigationProvider>
-          <AppRouter />
-        </NavigationProvider>
-      </GameProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <GameProvider>
+          <NavigationProvider>
+            <AppRouter />
+          </NavigationProvider>
+        </GameProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
