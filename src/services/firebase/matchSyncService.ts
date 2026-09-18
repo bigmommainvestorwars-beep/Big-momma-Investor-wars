@@ -330,6 +330,11 @@ export class MatchSyncService {
               } catch {}
             }
             onData(data);
+          } else if (this.localContainerProvider) {
+            const local = this.localContainerProvider(matchId);
+            if (local) {
+              onData({ ...local.match });
+            }
           }
         },
         (err) => {
@@ -361,7 +366,7 @@ export class MatchSyncService {
     // Initial local dispatch if available
     if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
-      if (local) {
+      if (local && local.players.length > 0) {
         onData([...local.players]);
       }
     }
@@ -376,7 +381,17 @@ export class MatchSyncService {
         (snap) => {
           const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
           players.sort((a, b) => a.turnOrder - b.turnOrder);
-          if (this.remotePlayersUpdateHandler) {
+
+          // If snapshot is empty but local container has players, preserve local players
+          if (players.length === 0 && this.localContainerProvider) {
+            const local = this.localContainerProvider(matchId);
+            if (local && local.players.length > 0) {
+              onData([...local.players]);
+              return;
+            }
+          }
+
+          if (players.length > 0 && this.remotePlayersUpdateHandler) {
             try {
               this.remotePlayersUpdateHandler(matchId, players);
             } catch {}

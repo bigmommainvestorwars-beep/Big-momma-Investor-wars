@@ -142,13 +142,14 @@ export class CloudFunctionsClient {
         const rulesetVersion = (p.rulesetVersion as string) || '1.0.0';
         const isPrivate = (p.isPrivate as boolean) || false;
         const accessCode = p.accessCode as string | undefined;
+        const hostDisplayName = (p.displayName as string) || currentDisplayName;
         resultData = authoritativeServerEngine.createMatch(
           data.matchId,
           data.requestId,
           boardId,
           rulesetVersion,
           currentUserId,
-          currentDisplayName,
+          hostDisplayName,
           isPrivate,
           accessCode
         );
@@ -203,13 +204,15 @@ export class CloudFunctionsClient {
       }
       case 'joinMatchByAccessCode': {
         const rawCode = String(p.accessCode || '').trim();
-        const accessCode = rawCode.toUpperCase();
+        const cleanCode = rawCode.toUpperCase().replace(/\s+/g, '');
+        const cleanWithoutPrefix = cleanCode.replace(/^BM-/, '');
+        const cleanWithPrefix = cleanCode.startsWith('BM-') ? cleanCode : `BM-${cleanCode}`;
         let joinedResult: any = null;
 
         // 1. Try local memory search
         try {
           joinedResult = authoritativeServerEngine.joinMatchByAccessCode(
-            accessCode,
+            cleanCode,
             data.requestId,
             currentUserId,
             (p.displayName as string) || currentDisplayName
@@ -226,12 +229,34 @@ export class CloudFunctionsClient {
           let targetMatchDoc: FirestoreMatchDoc | null = null;
           if (db) {
             try {
-              const q = query(
+              // Try exact match
+              let q = query(
                 collection(db, 'matches'),
-                where('accessCode', '==', accessCode),
+                where('accessCode', '==', cleanCode),
                 limit(1)
               );
-              const snap = await getDocs(q);
+              let snap = await getDocs(q);
+
+              // Try with prefix
+              if (snap.empty && cleanWithPrefix !== cleanCode) {
+                q = query(
+                  collection(db, 'matches'),
+                  where('accessCode', '==', cleanWithPrefix),
+                  limit(1)
+                );
+                snap = await getDocs(q);
+              }
+
+              // Try without prefix
+              if (snap.empty && cleanWithoutPrefix !== cleanCode) {
+                q = query(
+                  collection(db, 'matches'),
+                  where('accessCode', '==', cleanWithoutPrefix),
+                  limit(1)
+                );
+                snap = await getDocs(q);
+              }
+
               if (!snap.empty) {
                 targetMatchDoc = { id: snap.docs[0].id, ...snap.docs[0].data() } as FirestoreMatchDoc;
               } else {
@@ -239,7 +264,7 @@ export class CloudFunctionsClient {
                 if (docSnap.exists()) {
                   targetMatchDoc = { id: docSnap.id, ...docSnap.data() } as FirestoreMatchDoc;
                 } else {
-                  const upperSnap = await getDoc(doc(db, 'matches', accessCode));
+                  const upperSnap = await getDoc(doc(db, 'matches', cleanCode));
                   if (upperSnap.exists()) {
                     targetMatchDoc = { id: upperSnap.id, ...upperSnap.data() } as FirestoreMatchDoc;
                   }
@@ -263,7 +288,7 @@ export class CloudFunctionsClient {
             );
             resultData = { matchId: targetMatchDoc.id, player };
           } else {
-            throw new Error(`Match with access code "${accessCode}" not found or lobby is no longer active.`);
+            throw new Error(`Match with access code "${cleanCode}" not found or lobby is no longer active.`);
           }
         }
         break;
@@ -466,7 +491,8 @@ export class CloudFunctionsClient {
     boardId: string = 'default-standard-board',
     rulesetVersion: string = '1.0.0',
     isPrivate: boolean = false,
-    accessCode?: string
+    accessCode?: string,
+    displayName?: string
   ) {
     return this.call<
       {
@@ -474,12 +500,13 @@ export class CloudFunctionsClient {
         rulesetVersion?: string;
         isPrivate?: boolean;
         accessCode?: string;
+        displayName?: string;
       },
       unknown
     >('createMatch', {
       matchId,
       requestId,
-      payload: { boardId, rulesetVersion, isPrivate, accessCode },
+      payload: { boardId, rulesetVersion, isPrivate, accessCode, displayName },
     });
   }
 

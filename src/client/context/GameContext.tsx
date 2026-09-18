@@ -176,7 +176,7 @@ function formatUserFacingMatchError(err: unknown): string {
 }
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
   const [match, setMatch] = useState<FirestoreMatchDoc | null>(null);
   const [players, setPlayers] = useState<FirestorePlayerDoc[]>([]);
@@ -455,7 +455,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await new Promise((resolve) => setTimeout(resolve, 800));
 
       const reqId = `qm_${Date.now()}`;
-      const res = await cloudFunctionsClient.findOrCreateQuickMatch(reqId);
+      const res = await cloudFunctionsClient.findOrCreateQuickMatch(
+        reqId,
+        user?.displayName || 'Investor'
+      );
       setMatchmakingQueueState('matched');
 
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -473,7 +476,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setMatchError(msg);
       throw err;
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?.displayName]);
 
   const cancelQuickMatchQueue = useCallback(() => {
     setMatchmakingQueueState('idle');
@@ -507,13 +510,22 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         (err as any).code = 'AUTH_REQUIRED';
         throw err;
       }
+      const trimmedCode = code.trim();
+      if (!trimmedCode) {
+        setMatchError('Please enter a valid room code.');
+        throw new Error('Please enter a valid room code.');
+      }
       setIsActionPending(true);
       setMatchError(null);
       try {
         const reqId = `join_code_${Date.now()}`;
-        const res = await cloudFunctionsClient.joinMatchByAccessCode(code, reqId);
+        const res = await cloudFunctionsClient.joinMatchByAccessCode(
+          trimmedCode,
+          reqId,
+          user?.displayName || 'Investor (Player)'
+        );
         const matchId = res.data?.matchId;
-        if (!matchId) throw new Error(`No lobby found for code "${code}".`);
+        if (!matchId) throw new Error(`No lobby found for code "${trimmedCode}".`);
         setActiveMatchId(matchId);
       } catch (err) {
         const msg = formatUserFacingMatchError(err);
@@ -523,7 +535,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, user?.displayName]
   );
 
   const createPrivateMatch = useCallback(async (): Promise<string> => {
@@ -546,7 +558,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'default-standard-board',
         '1.0.0',
         true,
-        accessCode
+        accessCode,
+        user?.displayName || 'Investor (Host)'
       );
       setActiveMatchId(newMatchId);
       return newMatchId;
@@ -557,7 +570,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, user?.displayName]);
 
   // Create Match
   const createMatch = useCallback(

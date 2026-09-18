@@ -84,7 +84,7 @@ export class AuthoritativeServerEngine {
       },
       (matchId, remotePlayers) => {
         const local = this.matches.get(matchId);
-        if (local) {
+        if (local && remotePlayers && remotePlayers.length > 0) {
           for (const p of remotePlayers) {
             local.players.set(p.id, p);
           }
@@ -111,8 +111,10 @@ export class AuthoritativeServerEngine {
     }
     if (existing) {
       existing.match = { ...existing.match, ...matchDoc };
-      for (const p of playersList) {
-        existing.players.set(p.id, p);
+      if (playersList.length > 0) {
+        for (const p of playersList) {
+          existing.players.set(p.id, p);
+        }
       }
       if (logsList.length > 0) existing.logs = logsList;
       if (activeAuction !== undefined) existing.activeAuction = activeAuction;
@@ -609,14 +611,24 @@ export class AuthoritativeServerEngine {
     userId: string,
     displayName: string
   ): { matchId: string; player: FirestorePlayerDoc } {
-    const cleanCode = accessCode.trim().toUpperCase();
+    const cleanCode = accessCode.trim().toUpperCase().replace(/\s+/g, '');
+    const cleanWithoutPrefix = cleanCode.replace(/^BM-/, '');
+    const cleanWithPrefix = cleanCode.startsWith('BM-') ? cleanCode : `BM-${cleanCode}`;
+
     for (const [id, container] of this.matches.entries()) {
-      const matchCode = (container.match.accessCode || '').toUpperCase();
+      const matchCode = (container.match.accessCode || '').toUpperCase().replace(/\s+/g, '');
+      const matchWithoutPrefix = matchCode.replace(/^BM-/, '');
       const matchIdClean = id.toUpperCase();
-      if (
-        (matchCode === cleanCode || matchIdClean === cleanCode) &&
-        container.match.status === 'waiting_for_players'
-      ) {
+      const matchIdEnd = id.slice(-4).toUpperCase();
+
+      const isMatch =
+        matchCode === cleanCode ||
+        matchCode === cleanWithPrefix ||
+        matchWithoutPrefix === cleanWithoutPrefix ||
+        matchIdClean === cleanCode ||
+        matchIdEnd === cleanWithoutPrefix;
+
+      if (isMatch && container.match.status === 'waiting_for_players') {
         const player = this.joinMatch(id, requestId, userId, displayName);
         return { matchId: id, player };
       }
