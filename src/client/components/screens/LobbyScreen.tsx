@@ -93,9 +93,11 @@ export const LobbyScreen: React.FC = () => {
             <div className="flex items-center gap-2 text-xs font-mono font-bold text-emerald-400 uppercase tracking-widest">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
               <span>Multiplayer Room Active</span>
+              <span className="text-slate-600">•</span>
+              <span className="text-cyan-300 font-mono font-black">{players.length}/2 players</span>
             </div>
-            <h1 className="text-2xl font-black uppercase tracking-wider text-white">
-              INVESTORS' LOBBY
+            <h1 className="text-xl sm:text-2xl font-black uppercase tracking-wider text-white">
+              INVESTOR LOBBY ROOM CODE: {accessCode}
             </h1>
           </div>
 
@@ -230,7 +232,7 @@ export const LobbyScreen: React.FC = () => {
             <span>
               {players.length < 2
                 ? 'Need at least 2 players to start'
-                : 'Start War (Begin Match)'}
+                : 'Start Match'}
             </span>
           </button>
         </div>

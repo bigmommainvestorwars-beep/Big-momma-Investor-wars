@@ -11,6 +11,7 @@ import { RateLimiter } from '../system/rateLimit/rateLimiter';
 import { IdempotencyService } from '../system/idempotency/idempotencyService';
 import { GameEngineInternal, MatchState, PlayerState } from '../internal/gameEngine';
 import { withErrorHandling } from '../system/errorWrapper';
+import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../config/testRoomConfig';
 import {
   ServerRequestEnvelope,
   ServerResponseEnvelope,
@@ -29,37 +30,26 @@ export const createMatch = onCall(
     AppCheckGuard.verify(request);
     RateLimiter.check(auth.userId, 'createMatch');
 
-    const { matchId, requestId, payload } = request.data;
+    let { matchId, requestId, payload } = request.data;
     if (!matchId) {
-      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TIMING, 'matchId is required.');
+      if (payload?.accessCode === TEST_ROOM_CODE || (IS_TEST_ROOM_MODE && payload?.isPrivate)) {
+        matchId = TEST_MATCH_ID;
+      } else {
+        throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TIMING, 'matchId is required.');
+      }
     }
 
-    const matchRef = db.collection('matches').doc(matchId);
+    const isTestRoom =
+      matchId === TEST_MATCH_ID ||
+      payload?.accessCode === TEST_ROOM_CODE ||
+      (IS_TEST_ROOM_MODE && payload?.isPrivate && !payload?.accessCode);
+    const generatedAccessCode = isTestRoom
+      ? TEST_ROOM_CODE
+      : (payload?.accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`);
+    const targetMatchId = isTestRoom ? TEST_MATCH_ID : matchId;
+
+    const matchRef = db.collection('matches').doc(targetMatchId);
     const existing = await matchRef.get();
-    if (existing.exists) {
-      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Match already exists.');
-    }
-
-    const generatedAccessCode = payload?.accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-
-    const initialMatch: MatchState = {
-      matchId,
-      boardId: payload?.boardId || 'default-standard-board',
-      rulesetVersion: payload?.rulesetVersion || '1.0.0',
-      status: 'waiting_for_players',
-      currentPhase: 'LOBBY',
-      currentPlayerId: null,
-      turnNumber: 0,
-      roundNumber: 0,
-      stateVersion: 1,
-      participantUserIds: [auth.userId],
-      hostUserId: auth.userId,
-      winnerId: null,
-      isPrivate: payload?.isPrivate || false,
-      accessCode: generatedAccessCode,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
 
     const hostPlayer: PlayerState = {
       id: auth.userId,
@@ -78,6 +68,29 @@ export const createMatch = onCall(
       lastActiveAt: Date.now(),
     };
 
+    if (existing.exists && !isTestRoom) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Match already exists.');
+    }
+
+    const initialMatch: MatchState = {
+      matchId: targetMatchId,
+      boardId: payload?.boardId || 'default-standard-board',
+      rulesetVersion: payload?.rulesetVersion || '1.0.0',
+      status: 'waiting_for_players',
+      currentPhase: 'LOBBY',
+      currentPlayerId: null,
+      turnNumber: 0,
+      roundNumber: 0,
+      stateVersion: existing.exists ? ((existing.data()?.stateVersion || 1) + 1) : 1,
+      participantUserIds: [auth.userId],
+      hostUserId: auth.userId,
+      winnerId: null,
+      isPrivate: isTestRoom ? true : (payload?.isPrivate || false),
+      accessCode: generatedAccessCode,
+      createdAt: existing.exists ? (existing.data()?.createdAt || Date.now()) : Date.now(),
+      updatedAt: Date.now(),
+    };
+
     await db.runTransaction(async (t) => {
       t.set(matchRef, initialMatch);
       t.set(matchRef.collection('players').doc(hostPlayer.id), hostPlayer);
@@ -87,7 +100,7 @@ export const createMatch = onCall(
       success: true,
       requestId,
       serverTime: Date.now(),
-      stateVersion: 1,
+      stateVersion: initialMatch.stateVersion,
       data: initialMatch,
     };
     return response;
@@ -256,20 +269,28 @@ export const joinMatchByAccessCode = onCall(
     const bmCode = `BM-${rawCode}`;
     const matchesRef = db.collection('matches');
 
-    let matchId: string | undefined;
+    const isTestCode =
+      cleanCode === TEST_ROOM_CODE ||
+      rawCode === '0X9X' ||
+      cleanCode.includes('0X9X') ||
+      cleanCode === TEST_MATCH_ID.toUpperCase();
 
-    // 1. Query by accessCode field (cleanCode, bmCode, rawCode)
-    const accessCodeQueries = [
-      matchesRef.where('accessCode', '==', cleanCode).limit(1).get(),
-      matchesRef.where('accessCode', '==', bmCode).limit(1).get(),
-      matchesRef.where('accessCode', '==', rawCode).limit(1).get(),
-    ];
+    let matchId: string | undefined = isTestCode ? TEST_MATCH_ID : undefined;
 
-    const results = await Promise.all(accessCodeQueries);
-    for (const snap of results) {
-      if (!snap.empty && snap.docs[0]) {
-        matchId = snap.docs[0].id;
-        break;
+    if (!matchId) {
+      // 1. Query by accessCode field (cleanCode, bmCode, rawCode)
+      const accessCodeQueries = [
+        matchesRef.where('accessCode', '==', cleanCode).limit(1).get(),
+        matchesRef.where('accessCode', '==', bmCode).limit(1).get(),
+        matchesRef.where('accessCode', '==', rawCode).limit(1).get(),
+      ];
+
+      const results = await Promise.all(accessCodeQueries);
+      for (const snap of results) {
+        if (!snap.empty && snap.docs[0]) {
+          matchId = snap.docs[0].id;
+          break;
+        }
       }
     }
 
@@ -327,6 +348,48 @@ export const joinMatchByAccessCode = onCall(
       async (t) => {
         const snap = await t.get(matchRef);
         if (!snap.exists) {
+          if (isTestCode) {
+            // Concurrency fallback for test room: if joiner joins before host creates, create the initial test lobby
+            const initialMatch: MatchState = {
+              matchId: TEST_MATCH_ID,
+              boardId: 'default-standard-board',
+              rulesetVersion: '1.0.0',
+              status: 'waiting_for_players',
+              currentPhase: 'LOBBY',
+              currentPlayerId: null,
+              turnNumber: 0,
+              roundNumber: 0,
+              stateVersion: 1,
+              participantUserIds: [auth.userId],
+              hostUserId: auth.userId,
+              winnerId: null,
+              isPrivate: true,
+              accessCode: TEST_ROOM_CODE,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            };
+
+            const firstPlayer: PlayerState = {
+              id: auth.userId,
+              userId: auth.userId,
+              displayName: payload?.displayName || auth.email?.split('@')[0] || 'Player 1',
+              currentSpaceIndex: 0,
+              status: 'active',
+              turnOrder: 0,
+              netWorth: 1500,
+              cash: 1500,
+              specialPoints: 50,
+              ownedSpaceIds: [],
+              companyShareIds: [],
+              modifierIds: [],
+              connected: true,
+              lastActiveAt: Date.now(),
+            };
+
+            t.set(matchRef, initialMatch);
+            t.set(matchRef.collection('players').doc(firstPlayer.id), firstPlayer);
+            return { matchId: TEST_MATCH_ID, player: firstPlayer, stateVersion: 1 };
+          }
           throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
         }
         const match = snap.data() as MatchState;

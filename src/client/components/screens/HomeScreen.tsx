@@ -193,7 +193,7 @@ export const HomeScreen: React.FC = () => {
                   <input
                     id="match-access-code-input"
                     type="text"
-                    placeholder="e.g. BM-9K2F"
+                    placeholder="e.g. BM-0X9X"
                     value={roomCodeInput}
                     onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
                     maxLength={10}
@@ -205,7 +205,7 @@ export const HomeScreen: React.FC = () => {
                     disabled={isJoiningCode || !roomCodeInput.trim()}
                     className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 active:scale-95 disabled:opacity-40 text-white rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-all"
                   >
-                    {isJoiningCode ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Join'}
+                    {isJoiningCode ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Join Match'}
                   </button>
                 </div>
                 {codeError && (
@@ -218,7 +218,7 @@ export const HomeScreen: React.FC = () => {
             )}
           </div>
 
-          {/* Host Private Match */}
+          {/* Host Private Match / Create Investor Lobby */}
           <button
             id="host-private-lobby-btn"
             onClick={handleHostPrivate}
@@ -226,9 +226,9 @@ export const HomeScreen: React.FC = () => {
           >
             <div className="flex items-center gap-2.5">
               <PlusCircle className="w-4 h-4 text-emerald-400" />
-              <span>Host Private Lobby</span>
+              <span>Create Investor Lobby</span>
             </div>
-            <span className="text-[10px] font-mono text-slate-500">CUSTOM</span>
+            <span className="text-[10px] font-mono text-emerald-400">BM-0X9X</span>
           </button>
 
           {/* Solo / Bot Simulation Setup */}

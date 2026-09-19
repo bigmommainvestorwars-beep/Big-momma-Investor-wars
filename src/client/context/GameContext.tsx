@@ -25,6 +25,7 @@ import { useAuth } from './AuthContext';
 import { botRunnerService } from '../../bot/botRunnerService';
 import { PRESET_BOT_PROFILES } from '../../bot/botTypes';
 import { PendingMarketChoiceDoc, MarketEvent } from '../../types/marketEvent';
+import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../config/testRoomConfig';
 
 export interface GameContextValue {
   // Matches state
@@ -510,9 +511,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsActionPending(true);
       setMatchError(null);
       try {
+        const cleanCode = code.trim().toUpperCase();
+        const targetCode =
+          IS_TEST_ROOM_MODE &&
+          (cleanCode === TEST_ROOM_CODE || cleanCode === '0X9X' || cleanCode.includes('0X9X'))
+            ? TEST_ROOM_CODE
+            : cleanCode;
+
         const reqId = `join_code_${Date.now()}`;
-        const res = await cloudFunctionsClient.joinMatchByAccessCode(code, reqId);
-        const matchId = res.data?.matchId;
+        const res = await cloudFunctionsClient.joinMatchByAccessCode(targetCode, reqId);
+        const matchId = res.data?.matchId || (IS_TEST_ROOM_MODE ? TEST_MATCH_ID : undefined);
         if (!matchId) throw new Error(`No lobby found for code "${code}".`);
         setActiveMatchId(matchId);
       } catch (err) {
@@ -537,9 +545,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsActionPending(true);
     setMatchError(null);
     try {
-      const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const newMatchId = IS_TEST_ROOM_MODE
+        ? TEST_MATCH_ID
+        : `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const reqId = `create_priv_${Date.now()}`;
-      const accessCode = `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+      const accessCode = IS_TEST_ROOM_MODE
+        ? TEST_ROOM_CODE
+        : `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
       await cloudFunctionsClient.createMatch(
         newMatchId,
         reqId,

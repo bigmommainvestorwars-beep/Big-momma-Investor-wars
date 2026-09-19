@@ -23,6 +23,7 @@ import {
   DEFAULT_MARKET_EVENTS,
   MarketEventDefinition,
 } from '../config/marketEventConfig';
+import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../config/testRoomConfig';
 
 export interface ActiveMatchModifier {
   id: string;
@@ -190,11 +191,53 @@ export class AuthoritativeServerEngine {
     }
     this.processedRequests.add(requestId);
 
-    const generatedCode =
-      accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+    const isTestRoom =
+      matchId === TEST_MATCH_ID ||
+      accessCode === TEST_ROOM_CODE ||
+      (IS_TEST_ROOM_MODE && isPrivate && !accessCode);
+
+    const targetMatchId = isTestRoom ? TEST_MATCH_ID : matchId;
+    const generatedCode = isTestRoom
+      ? TEST_ROOM_CODE
+      : (accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`);
+
+    const existingContainer = this.matches.get(targetMatchId);
+    if (existingContainer && isTestRoom) {
+      // Clean reset of test lobby for new host session
+      existingContainer.match.status = 'waiting_for_players';
+      existingContainer.match.currentPhase = 'LOBBY';
+      existingContainer.match.hostUserId = hostUserId;
+      existingContainer.match.participantUserIds = [hostUserId];
+      existingContainer.match.accessCode = TEST_ROOM_CODE;
+      existingContainer.match.stateVersion += 1;
+      existingContainer.match.updatedAt = Date.now();
+      existingContainer.players.clear();
+      existingContainer.players.set(hostUserId, {
+        id: hostUserId,
+        userId: hostUserId,
+        displayName: hostDisplayName,
+        currentSpaceIndex: 0,
+        status: 'active',
+        turnOrder: 0,
+        netWorth: 1500,
+        cash: 1500,
+        specialPoints: 50,
+        ownedSpaceIds: [],
+        mortgagedSpaceIds: [],
+        companyShareIds: [],
+        modifierIds: [],
+        isBot: false,
+        connected: true,
+        lastActiveAt: Date.now(),
+      });
+      existingContainer.logs = [];
+      this.appendLog(existingContainer, 'MATCH_CREATED', `Test match lobby created by ${hostDisplayName}.`, hostUserId);
+      this.emitStateChange(existingContainer);
+      return existingContainer.match;
+    }
 
     const match: FirestoreMatchDoc = {
-      id: matchId,
+      id: targetMatchId,
       hostUserId,
       boardId,
       rulesetVersion,
@@ -205,7 +248,7 @@ export class AuthoritativeServerEngine {
       roundNumber: 0,
       stateVersion: 1,
       participantUserIds: [hostUserId],
-      isPrivate,
+      isPrivate: isTestRoom ? true : isPrivate,
       accessCode: generatedCode,
       createdAt: Date.now(),
       updatedAt: Date.now(),
@@ -525,6 +568,35 @@ export class AuthoritativeServerEngine {
     const cleanCode = accessCode.trim().toUpperCase();
     const rawCode = cleanCode.replace(/^BM-/, '');
     const bmCode = `BM-${rawCode}`;
+
+    const isTestCode =
+      cleanCode === TEST_ROOM_CODE ||
+      rawCode === '0X9X' ||
+      cleanCode.includes('0X9X') ||
+      cleanCode === TEST_MATCH_ID.toUpperCase();
+
+    if (isTestCode) {
+      const container = this.matches.get(TEST_MATCH_ID);
+      if (container) {
+        const player = this.joinMatch(TEST_MATCH_ID, requestId, userId, displayName);
+        return { matchId: TEST_MATCH_ID, player };
+      } else {
+        // Concurrency fallback for test room: create test lobby
+        this.createMatch(
+          TEST_MATCH_ID,
+          requestId,
+          'default-standard-board',
+          '1.0.0',
+          userId,
+          displayName,
+          true,
+          TEST_ROOM_CODE
+        );
+        const newContainer = this.matches.get(TEST_MATCH_ID)!;
+        const player = newContainer.players.get(userId)!;
+        return { matchId: TEST_MATCH_ID, player };
+      }
+    }
 
     for (const [id, container] of this.matches.entries()) {
       if (container.match.status !== 'waiting_for_players') continue;
