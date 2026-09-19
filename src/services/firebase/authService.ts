@@ -6,6 +6,8 @@
 import {
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signInAnonymously as fbSignInAnonymously,
   signInWithEmailAndPassword as fbSignInWithEmail,
   createUserWithEmailAndPassword as fbCreateUserWithEmail,
@@ -208,6 +210,56 @@ class FirebaseAuthService implements IAuthService {
     }
   }
 
+  /**
+   * Initiates Google Sign-In via full-page redirect.
+   * Highly recommended for iOS Safari and mobile browsers where popups are blocked.
+   */
+  public async signInWithGoogleRedirect(): Promise<void> {
+    const auth = getFirebaseAuth();
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: 'select_account' });
+      await signInWithRedirect(auth, provider);
+    } catch (error: any) {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'deployed domain';
+      if (error?.code === 'auth/unauthorized-domain') {
+        const msg = `Google Sign-In blocked: "${host}" is not listed in Firebase Authorized Domains. Add "${host}" in Firebase Console > Authentication > Settings > Authorized domains.`;
+        const domainErr = new Error(msg);
+        (domainErr as any).code = 'auth/unauthorized-domain';
+        errorHandler.capture(domainErr, { errorCode: 'AUTH_UNAUTHORIZED_DOMAIN', action: 'signInWithGoogleRedirect' });
+        throw domainErr;
+      }
+      errorHandler.capture(error, { errorCode: 'AUTH_SIGN_IN_FAILED', action: 'signInWithGoogleRedirect' });
+      throw error;
+    }
+  }
+
+  /**
+   * Checks for a returning Google redirect authentication credential
+   */
+  public async checkRedirectResult(): Promise<User | null> {
+    const auth = getFirebaseAuth();
+    try {
+      const credential = await getRedirectResult(auth);
+      if (credential?.user) {
+        const user = mapFirebaseUser(credential.user);
+        logger.log('security_event', 'info', `User signed in via Google redirect: ${user.uid}`, { userId: user.uid });
+        return user;
+      }
+      return null;
+    } catch (error: any) {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'deployed domain';
+      if (error?.code === 'auth/unauthorized-domain') {
+        const msg = `Google Sign-In blocked: "${host}" is not listed in Firebase Authorized Domains. Add "${host}" in Firebase Console > Authentication > Settings > Authorized domains.`;
+        const domainErr = new Error(msg);
+        (domainErr as any).code = 'auth/unauthorized-domain';
+        throw domainErr;
+      }
+      console.warn('[AuthService] Redirect result note:', error?.message || error);
+      return null;
+    }
+  }
+
   public async signInWithGoogle(): Promise<User> {
     const auth = getFirebaseAuth();
     try {
@@ -227,7 +279,7 @@ class FirebaseAuthService implements IAuthService {
         throw domainErr;
       }
       if (error?.code === 'auth/popup-closed-by-user') {
-        const msg = `Google popup was closed. If the window refused to connect (ERR_CONNECTION_REFUSED), "${host}" must be added to Firebase Console Authorized Domains. In the meantime, use 1-Tap Phone or Email Sign-In!`;
+        const msg = 'Google popup was closed before sign-in completed. On iPhone/Safari, use "Google Sign-In (Redirect Mode)" or 1-Tap Phone Sign-In below!';
         const popupErr = new Error(msg);
         (popupErr as any).code = 'auth/popup-closed-by-user';
         throw popupErr;
@@ -239,7 +291,7 @@ class FirebaseAuthService implements IAuthService {
         throw netErr;
       }
       if (error?.code === 'auth/popup-blocked') {
-        const msg = 'Safari or Chrome blocked the popup window. Tap to allow popups in browser settings, or use 1-Tap Phone Sign-In below.';
+        const msg = 'Safari or Chrome blocked the popup window. Tap "Google Sign-In (Redirect Mode)" or use 1-Tap Phone Sign-In below.';
         const popupErr = new Error(msg);
         (popupErr as any).code = 'auth/popup-blocked';
         errorHandler.capture(popupErr, { errorCode: 'AUTH_POPUP_BLOCKED', action: 'signInWithGoogle' });

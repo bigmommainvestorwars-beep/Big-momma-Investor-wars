@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 export const AuthScreen: React.FC = () => {
   const {
     signInWithGoogle,
+    signInWithGoogleRedirect,
     signInWithEmail,
     signUpWithEmail,
     signInWithQuickProfile,
@@ -44,26 +45,41 @@ export const AuthScreen: React.FC = () => {
       await signInWithGoogle();
     } catch (err: any) {
       const msg = err?.message || String(err);
-      if (
-        err?.code === 'auth/unauthorized-domain' ||
-        msg.includes('unauthorized-domain') ||
-        msg.includes('Authorized Domains')
-      ) {
+      if (err?.code === 'auth/unauthorized-domain' || msg.includes('auth/unauthorized-domain')) {
         setDomainWarning(currentHost);
         setErrorMessage(
-          `Google Sign-In blocked: "${currentHost}" is not added to Firebase Authorized Domains.`
+          `Google Sign-In blocked: "${currentHost}" is not listed in Firebase Authorized Domains.`
         );
       } else if (err?.code === 'auth/popup-blocked' || msg.includes('popup-blocked')) {
-        setErrorMessage('Browser blocked the popup window. Allow popups in your browser settings or use 1-Tap Phone Sign-In.');
+        setErrorMessage('Browser blocked the popup window. Use "Sign in with Google (Redirect Mode)" below for iPhone / Safari!');
       } else if (err?.code === 'auth/popup-closed-by-user') {
-        setDomainWarning(currentHost);
         setErrorMessage(
-          `Google popup was closed. On Vercel deployments, you must add "${currentHost}" to Firebase Console > Authentication > Settings > Authorized domains. In the meantime, use 1-Tap Phone or Email Sign-In below!`
+          'Google popup was closed before completing login. On mobile Safari, use "Sign in with Google (Redirect Mode)" below or 1-Tap Phone Sign-In!'
         );
       } else {
         setErrorMessage(msg);
       }
     } finally {
+      setLoadingAction(null);
+    }
+  };
+
+  const handleGoogleRedirectLogin = async () => {
+    setErrorMessage(null);
+    setDomainWarning(null);
+    setLoadingAction('google-redirect');
+    try {
+      await signInWithGoogleRedirect();
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      if (err?.code === 'auth/unauthorized-domain' || msg.includes('auth/unauthorized-domain')) {
+        setDomainWarning(currentHost);
+        setErrorMessage(
+          `Google Sign-In blocked: "${currentHost}" is not listed in Firebase Authorized Domains.`
+        );
+      } else {
+        setErrorMessage(msg);
+      }
       setLoadingAction(null);
     }
   };
@@ -354,17 +370,19 @@ export const AuthScreen: React.FC = () => {
 
           {/* TAB 2: GOOGLE SIGN-IN */}
           {activeTab === 'google' && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <p className="text-xs text-slate-400 text-center font-mono">
                 OFFICIAL GOOGLE OAUTH AUTHORIZATION
               </p>
-              
+
+              {/* Primary Mobile-Friendly Redirect Option */}
               <button
+                id="google-redirect-btn"
                 disabled={Boolean(loadingAction) || authLoading}
-                onClick={handleGoogleLogin}
-                className="w-full py-4 px-4 bg-white hover:bg-slate-100 text-slate-900 rounded-xl font-bold flex items-center justify-center gap-3 transition-colors active:scale-95 disabled:opacity-50"
+                onClick={handleGoogleRedirectLogin}
+                className="w-full py-3.5 px-4 bg-white hover:bg-slate-100 text-slate-900 rounded-xl font-bold flex items-center justify-center gap-3 transition-colors active:scale-95 disabled:opacity-50 shadow-lg shadow-white/10 cursor-pointer"
               >
-                {loadingAction === 'google' ? (
+                {loadingAction === 'google-redirect' ? (
                   <Loader2 className="w-5 h-5 animate-spin text-slate-800" />
                 ) : (
                   <img
@@ -373,26 +391,40 @@ export const AuthScreen: React.FC = () => {
                     className="w-5 h-5"
                   />
                 )}
-                <span>AUTHORIZE WITH GOOGLE</span>
+                <span>SIGN IN WITH GOOGLE (REDIRECT / MOBILE)</span>
+              </button>
+
+              {/* Desktop Popup Option */}
+              <button
+                id="google-popup-btn"
+                disabled={Boolean(loadingAction) || authLoading}
+                onClick={handleGoogleLogin}
+                className="w-full py-2.5 px-4 bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-white rounded-xl font-medium text-xs flex items-center justify-center gap-2 border border-slate-700/60 transition-colors active:scale-95 disabled:opacity-50 cursor-pointer"
+              >
+                {loadingAction === 'google' && <Loader2 className="w-4 h-4 animate-spin text-slate-300" />}
+                <span>Open Desktop Popup Window</span>
               </button>
 
               <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-slate-200">Vercel Domain Authorization:</span>
+                  <span className="font-semibold text-slate-200">Firebase Authorized Domain:</span>
                   <button
                     type="button"
                     onClick={copyDomainToClipboard}
-                    className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1"
+                    className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1 cursor-pointer"
                   >
                     {copiedDomain ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedDomain ? 'Copied Domain' : 'Copy Domain'}</span>
+                    <span>{copiedDomain ? 'Copied' : 'Copy'}</span>
                   </button>
                 </div>
-                <p className="text-slate-400 leading-relaxed">
-                  If Google popup shows <em>"refused to connect"</em>, add <code className="text-emerald-300 font-mono select-all">{currentHost}</code> in Firebase Console under Authentication → Settings → Authorized domains.
+                <div className="font-mono text-emerald-300 text-[10px] bg-black/40 px-2 py-1 rounded border border-slate-800 truncate select-all">
+                  {currentHost}
+                </div>
+                <p className="text-slate-400 leading-relaxed text-[10px]">
+                  <strong>Tip:</strong> If you already added the domain above to Authorized Domains, also verify in Firebase Console that the <strong>Google provider is Enabled</strong> under <em>Authentication → Sign-in method</em> with a project support email set.
                 </p>
                 <p className="text-[10px] text-slate-500">
-                  Tip: The <strong>1-Tap Phone</strong> tab bypasses domain whitelisting completely.
+                  <strong>iPhone Note:</strong> iOS Safari often blocks popups. Tap <strong>Redirect / Mobile</strong> above or use <strong>1-Tap Phone</strong>.
                 </p>
               </div>
             </div>

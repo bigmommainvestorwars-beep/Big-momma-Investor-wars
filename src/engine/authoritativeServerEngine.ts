@@ -72,6 +72,98 @@ export class AuthoritativeServerEngine {
       };
     });
     matchSyncService.registerLocalOpenMatchesProvider(() => this.getOpenMatches());
+    matchSyncService.registerPlayerSyncCallback((matchId, players) => {
+      this.syncPlayers(matchId, players);
+    });
+    matchSyncService.registerMatchSyncCallback((matchId, matchDoc) => {
+      const container = this.matches.get(matchId);
+      if (container) {
+        Object.assign(container.match, matchDoc);
+      }
+    });
+  }
+
+  public syncPlayers(matchId: string, players: FirestorePlayerDoc[]): void {
+    const container = this.matches.get(matchId);
+    if (!container) return;
+    container.players.clear();
+    for (const p of players) {
+      container.players.set(p.id, { ...p });
+      if (!container.match.participantUserIds.includes(p.id)) {
+        container.match.participantUserIds.push(p.id);
+      }
+    }
+  }
+
+  public removeLobbyPlayer(matchId: string, requestId: string, targetPlayerId: string): void {
+    const container = this.matches.get(matchId);
+    if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
+    if (container.match.status !== 'waiting_for_players') {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Cannot remove players once match started.');
+    }
+
+    const player = container.players.get(targetPlayerId);
+    if (!player) return;
+    if (player.id === container.match.hostUserId) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.AUTH_FORBIDDEN, 'Cannot remove host from lobby.');
+    }
+
+    container.players.delete(targetPlayerId);
+    container.match.participantUserIds = container.match.participantUserIds.filter((id) => id !== targetPlayerId);
+
+    // Re-index turn order
+    let order = 0;
+    for (const p of container.players.values()) {
+      p.turnOrder = order++;
+    }
+    this.incrementVersion(container.match);
+    this.appendLog(container, 'PLAYER_REMOVED', `${player.displayName} removed from lobby.`);
+    this.emitStateChange(container);
+  }
+
+  public resetLobby(
+    matchId: string,
+    requestId: string,
+    hostUserId: string,
+    hostDisplayName: string
+  ): AuthoritativeMatchContainer {
+    const container = this.matches.get(matchId);
+    if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
+
+    container.match.status = 'waiting_for_players';
+    container.match.currentPhase = 'LOBBY';
+    container.match.hostUserId = hostUserId;
+    container.match.participantUserIds = [hostUserId];
+    container.match.turnNumber = 0;
+    container.match.roundNumber = 0;
+    container.match.currentPlayerId = null;
+    container.match.updatedAt = Date.now();
+    this.incrementVersion(container.match);
+
+    container.players.clear();
+    const hostPlayer: FirestorePlayerDoc = {
+      id: hostUserId,
+      userId: hostUserId,
+      displayName: hostDisplayName,
+      currentSpaceIndex: 0,
+      status: 'active',
+      turnOrder: 0,
+      netWorth: 1500,
+      cash: 1500,
+      specialPoints: 50,
+      ownedSpaceIds: [],
+      mortgagedSpaceIds: [],
+      companyShareIds: [],
+      modifierIds: [],
+      isBot: false,
+      connected: true,
+      lastActiveAt: Date.now(),
+    };
+    container.players.set(hostUserId, hostPlayer);
+    container.logs = [];
+    this.appendLog(container, 'LOBBY_RESET', `Lobby reset by host ${hostDisplayName}.`);
+    this.emitStateChange(container);
+    return container;
   }
 
   public getOpenMatches(): FirestoreMatchDoc[] {
@@ -689,6 +781,9 @@ export class AuthoritativeServerEngine {
     const container = this.matches.get(matchId);
     if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
     if (container.match.status !== 'waiting_for_players') {
+      if (container.match.status === 'active' || container.match.status === 'in_progress') {
+        return container.match;
+      }
       throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Match is not in lobby state.');
     }
 
@@ -696,7 +791,13 @@ export class AuthoritativeServerEngine {
       throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'At least 2 players required to start.');
     }
 
-    const firstPlayer = Array.from(container.players.values()).find((p) => p.turnOrder === 0);
+    // Sort and normalize player turn orders sequentially
+    const sortedPlayers = Array.from(container.players.values()).sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+    sortedPlayers.forEach((p, idx) => {
+      p.turnOrder = idx;
+    });
+
+    const firstPlayer = sortedPlayers[0];
     container.match.status = 'active';
     container.match.currentPhase = 'TURN_START';
     container.match.currentPlayerId = firstPlayer?.id || null;

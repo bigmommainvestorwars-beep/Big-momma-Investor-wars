@@ -119,23 +119,40 @@ export class CloudFunctionsClient {
       storedName ||
       (auth?.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Investor');
 
-    // Pre-hydrate match from Firestore if not present in local memory
+    // Pre-hydrate match from Firestore if not present in local memory or synchronize fresh players from Firestore
     const targetMatchIdToHydrate =
       IS_TEST_ROOM_MODE && (!data.matchId || data.matchId === TEST_MATCH_ID || data.matchId === 'match_test_bm_0x9x')
         ? TEST_MATCH_ID
         : data.matchId;
 
-    if (targetMatchIdToHydrate && !authoritativeServerEngine.getMatchContainer(targetMatchIdToHydrate)) {
+    if (targetMatchIdToHydrate && functionName !== 'createMatch') {
       const db = getFirebaseFirestore();
       if (db) {
         try {
           const mDocRef = doc(db, 'matches', targetMatchIdToHydrate);
           const mSnap = await getDoc(mDocRef);
+          const pSnap = await getDocs(collection(db, 'matches', targetMatchIdToHydrate, 'players'));
+
           if (mSnap.exists()) {
             const matchData = { id: mSnap.id, ...mSnap.data() } as FirestoreMatchDoc;
-            const pSnap = await getDocs(collection(db, 'matches', targetMatchIdToHydrate, 'players'));
             const playersData = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
-            authoritativeServerEngine.hydrateMatchContainer(matchData, playersData);
+            playersData.sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+
+            let container = authoritativeServerEngine.getMatchContainer(targetMatchIdToHydrate);
+            if (!container) {
+              container = authoritativeServerEngine.hydrateMatchContainer(matchData, playersData);
+            } else {
+              Object.assign(container.match, matchData);
+              if (playersData.length > 0) {
+                container.players.clear();
+                for (const p of playersData) {
+                  container.players.set(p.id, { ...p });
+                  if (!container.match.participantUserIds.includes(p.id)) {
+                    container.match.participantUserIds.push(p.id);
+                  }
+                }
+              }
+            }
           }
         } catch (err) {
           console.warn(`[CloudFunctionsClient] Firestore pre-hydration notice for ${targetMatchIdToHydrate}:`, err);
@@ -292,6 +309,21 @@ export class CloudFunctionsClient {
         const botId = p.botId as string;
         authoritativeServerEngine.removeBotPlayer(data.matchId, data.requestId, botId);
         resultData = { success: true };
+        break;
+      }
+      case 'removeLobbyPlayer': {
+        const targetId = p.targetPlayerId as string;
+        authoritativeServerEngine.removeLobbyPlayer(data.matchId, data.requestId, targetId);
+        resultData = { success: true };
+        break;
+      }
+      case 'resetLobby': {
+        resultData = authoritativeServerEngine.resetLobby(
+          data.matchId,
+          data.requestId,
+          currentUserId,
+          currentDisplayName
+        );
         break;
       }
       case 'startMatch': {
@@ -457,7 +489,7 @@ export class CloudFunctionsClient {
           );
 
           const playersCol = collection(db, 'matches', container.match.id, 'players');
-          if (functionName === 'createMatch') {
+          if (functionName === 'createMatch' || functionName === 'resetLobby') {
             try {
               const oldSnap = await getDocs(playersCol);
               for (const oldDoc of oldSnap.docs) {
@@ -467,6 +499,16 @@ export class CloudFunctionsClient {
               }
             } catch (cleanupErr) {
               console.warn('[CloudFunctionsClient] Stale player cleanup note:', cleanupErr);
+            }
+          }
+          if (functionName === 'removeLobbyPlayer' || functionName === 'removeBotPlayer') {
+            const targetId = (p.targetPlayerId as string) || (p.botId as string);
+            if (targetId) {
+              try {
+                await deleteDoc(doc(playersCol, targetId));
+              } catch (delErr) {
+                console.warn('[CloudFunctionsClient] Deleted player doc notice:', delErr);
+              }
             }
           }
           for (const player of container.players.values()) {
@@ -595,6 +637,22 @@ export class CloudFunctionsClient {
       matchId,
       requestId,
       payload: { botId },
+    });
+  }
+
+  public removeLobbyPlayer(matchId: string, requestId: string, targetPlayerId: string) {
+    return this.call<{ targetPlayerId: string }, unknown>('removeLobbyPlayer', {
+      matchId,
+      requestId,
+      payload: { targetPlayerId },
+    });
+  }
+
+  public resetLobby(matchId: string, requestId: string) {
+    return this.call<Record<string, never>, unknown>('resetLobby', {
+      matchId,
+      requestId,
+      payload: {},
     });
   }
 

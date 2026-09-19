@@ -15,6 +15,8 @@ import {
   WifiOff,
   RefreshCw,
   Sparkles,
+  Trash2,
+  RotateCcw,
 } from 'lucide-react';
 import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../../config/testRoomConfig';
 import { useAuth } from '../../context/AuthContext';
@@ -27,6 +29,8 @@ export const LobbyScreen: React.FC = () => {
     startMatch,
     addBotPlayer,
     fillRemainingWithBots,
+    removeLobbyPlayer,
+    resetLobby,
     leaveMatch,
     isActionPending,
     matchError,
@@ -56,7 +60,10 @@ export const LobbyScreen: React.FC = () => {
   const isHost =
     !match?.hostUserId ||
     match.hostUserId === user?.uid ||
-    (players.length > 0 && players[0].id === user?.uid);
+    (players.length > 0 && players[0]?.id === user?.uid) ||
+    players.length <= 1;
+
+  const canStartMatch = players.length >= 2;
 
   const clientRole = isHost ? 'CLIENT A' : 'CLIENT B';
   const diagnosticString = `${clientRole} userId: ${user?.uid || 'anonymous'} matchId: ${match?.id || TEST_MATCH_ID} roomCode: ${accessCode}`;
@@ -76,12 +83,27 @@ export const LobbyScreen: React.FC = () => {
   };
 
   const handleStartGame = async () => {
-    if (!isHost) return;
     try {
       await startMatch();
       navigate('GAMEPLAY');
     } catch (err) {
       console.warn('Start match error:', err);
+    }
+  };
+
+  const handleResetLobby = async () => {
+    try {
+      await resetLobby();
+    } catch (err) {
+      console.warn('Reset lobby error:', err);
+    }
+  };
+
+  const handleRemovePlayer = async (targetPlayerId: string) => {
+    try {
+      await removeLobbyPlayer(targetPlayerId);
+    } catch (err) {
+      console.warn('Remove player error:', err);
     }
   };
 
@@ -276,8 +298,21 @@ export const LobbyScreen: React.FC = () => {
                   </span>
                 </div>
               </div>
-              <div className="text-[11px] font-bold px-3 py-1 bg-emerald-950/50 text-emerald-400 border border-emerald-900 rounded-full uppercase tracking-wider">
-                READY
+              <div className="flex items-center gap-2">
+                <div className="text-[11px] font-bold px-3 py-1 bg-emerald-950/50 text-emerald-400 border border-emerald-900 rounded-full uppercase tracking-wider">
+                  READY
+                </div>
+                {isHost && (
+                  <button
+                    type="button"
+                    title="Remove Player 2"
+                    onClick={() => handleRemovePlayer(players[1].id)}
+                    disabled={isActionPending}
+                    className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-900/40 cursor-pointer disabled:opacity-40"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           ) : (
@@ -324,28 +359,57 @@ export const LobbyScreen: React.FC = () => {
                   </span>
                 </div>
               </div>
-              <div className="text-[11px] font-bold px-3 py-1 bg-emerald-950/50 text-emerald-400 border border-emerald-900 rounded-full uppercase tracking-wider">
-                READY
+              <div className="flex items-center gap-2">
+                <div className="text-[11px] font-bold px-3 py-1 bg-emerald-950/50 text-emerald-400 border border-emerald-900 rounded-full uppercase tracking-wider">
+                  READY
+                </div>
+                {isHost && (
+                  <button
+                    type="button"
+                    title={`Remove Slot ${idx + 3}`}
+                    onClick={() => handleRemovePlayer(p.id)}
+                    disabled={isActionPending}
+                    className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-900/40 cursor-pointer disabled:opacity-40"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           ))}
         </div>
 
-        {/* Quick Action Bar: Fill remaining with bots if empty */}
-        {emptySeats > 0 && (
-          <div className="mb-6 p-3 rounded-2xl bg-slate-950/50 border border-slate-800 flex items-center justify-between text-xs">
-            <span className="text-slate-400 font-mono">Want to start without waiting?</span>
+        {/* Quick Action Bar: Fill remaining with bots or Reset Lobby */}
+        <div className="mb-6 flex flex-col sm:flex-row items-center justify-between gap-2">
+          {emptySeats > 0 ? (
+            <div className="w-full p-3 rounded-2xl bg-slate-950/50 border border-slate-800 flex items-center justify-between text-xs">
+              <span className="text-slate-400 font-mono">Need an opponent now?</span>
+              <button
+                id="fill-bots-lobby-btn"
+                onClick={() => fillRemainingWithBots()}
+                disabled={isActionPending}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold uppercase tracking-wider text-[11px] flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                <span>Fill With Bot</span>
+              </button>
+            </div>
+          ) : (
+            <div />
+          )}
+
+          {isHost && players.length > 1 && (
             <button
-              id="fill-bots-lobby-btn"
-              onClick={() => fillRemainingWithBots()}
+              id="reset-lobby-btn"
+              onClick={handleResetLobby}
               disabled={isActionPending}
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold uppercase tracking-wider text-[11px] flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+              className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-xl text-[11px] font-mono flex items-center gap-1.5 border border-slate-800 transition-all cursor-pointer disabled:opacity-50 ml-auto shrink-0"
             >
-              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-              <span>Fill With Bot</span>
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset Lobby (Host Only)</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Launch / Start Match Actions */}
         <div className="flex flex-col sm:flex-row items-center gap-3">
@@ -362,16 +426,14 @@ export const LobbyScreen: React.FC = () => {
           <button
             id="start-match-lobby-btn"
             onClick={handleStartGame}
-            disabled={isActionPending || players.length < 2 || !isHost}
+            disabled={isActionPending || !canStartMatch}
             className="w-full sm:w-2/3 py-3.5 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border border-emerald-400/20"
           >
             <Play className="w-4 h-4 fill-current" />
             <span>
               {players.length < 2
-                ? 'Waiting for Player 2'
-                : isHost
-                ? 'Start Match'
-                : 'Waiting for Host to start'}
+                ? 'Waiting for Player 2 (or Fill Bot)'
+                : `Start Match (${players.length} Players Ready)`}
             </span>
           </button>
         </div>

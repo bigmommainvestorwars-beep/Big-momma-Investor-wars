@@ -87,6 +87,8 @@ export class MatchSyncService {
   private pendingChoiceListeners = new Map<string, Set<(choice: PendingMarketChoiceDoc | null) => void>>();
   private marketEventListeners = new Map<string, Set<(event: MarketEvent | null) => void>>();
   private openMatchesListeners = new Set<(matches: FirestoreMatchDoc[]) => void>();
+  private playerSyncCallbacks = new Set<(matchId: string, players: FirestorePlayerDoc[]) => void>();
+  private matchSyncCallbacks = new Set<(matchId: string, matchDoc: FirestoreMatchDoc) => void>();
   private localContainerProvider?: (matchId: string) => {
     match: FirestoreMatchDoc;
     players: FirestorePlayerDoc[];
@@ -108,6 +110,14 @@ export class MatchSyncService {
     } | undefined
   ): void {
     this.localContainerProvider = provider;
+  }
+
+  public registerPlayerSyncCallback(cb: (matchId: string, players: FirestorePlayerDoc[]) => void): void {
+    this.playerSyncCallbacks.add(cb);
+  }
+
+  public registerMatchSyncCallback(cb: (matchId: string, matchDoc: FirestoreMatchDoc) => void): void {
+    this.matchSyncCallbacks.add(cb);
   }
 
   public registerLocalOpenMatchesProvider(provider: () => FirestoreMatchDoc[]): void {
@@ -249,6 +259,13 @@ export class MatchSyncService {
                 Object.assign(local.match, matchDoc);
               }
             }
+            for (const cb of this.matchSyncCallbacks) {
+              try {
+                cb(matchId, matchDoc);
+              } catch (e) {
+                console.warn('[MatchSyncService] Match callback error:', e);
+              }
+            }
           }
         },
         (err) => {
@@ -299,6 +316,14 @@ export class MatchSyncService {
           onData(players);
 
           // Synchronize in-memory container so that host and guest engines stay identical
+          for (const cb of this.playerSyncCallbacks) {
+            try {
+              cb(matchId, players);
+            } catch (e) {
+              console.warn('[MatchSyncService] Player callback error:', e);
+            }
+          }
+
           if (this.localContainerProvider) {
             const local = this.localContainerProvider(matchId);
             if (local) {

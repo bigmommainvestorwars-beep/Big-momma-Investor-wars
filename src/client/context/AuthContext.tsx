@@ -24,6 +24,7 @@ interface AuthContextValue extends AuthState {
   setLocalTestMode: (enabled: boolean) => void;
   switchMockUser: (displayName: string, email?: string) => void;
   signInWithGoogle: () => Promise<User>;
+  signInWithGoogleRedirect: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<User>;
   signUpWithEmail: (email: string, password: string, displayName?: string) => Promise<User>;
   signInAnonymously: () => Promise<User>;
@@ -99,6 +100,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
+    // Check for incoming redirect authentication from Google
+    authService.checkRedirectResult().then((redirectUser) => {
+      if (redirectUser) {
+        setFirebaseAuthState({
+          isAuthenticated: true,
+          user: redirectUser,
+          isLoading: false,
+          error: null,
+        });
+        const dName = redirectUser.displayName || (redirectUser.email ? redirectUser.email.split('@')[0] : 'Investor');
+        setActiveClientUser({ uid: redirectUser.uid, displayName: dName });
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('investor_wars_client_uid', redirectUser.uid);
+          localStorage.setItem('investor_wars_client_name', dName);
+          localStorage.setItem('investor_wars_persisted_user', JSON.stringify(redirectUser));
+        }
+      }
+    }).catch((err) => {
+      console.warn('[AuthContext] Redirect login notice:', err);
+    });
+
     const unsubscribe = authService.onAuthStateChanged((user) => {
       setFirebaseAuthState({
         isAuthenticated: Boolean(user),
@@ -118,6 +140,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => unsubscribe();
   }, []);
+
+  const handleSignInWithGoogleRedirect = async (): Promise<void> => {
+    try {
+      setFirebaseAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
+      await authService.signInWithGoogleRedirect();
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
+      throw err;
+    }
+  };
 
   const handleSignInWithGoogle = async (): Promise<User> => {
     try {
@@ -306,6 +339,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setLocalTestMode,
         switchMockUser,
         signInWithGoogle: handleSignInWithGoogle,
+        signInWithGoogleRedirect: handleSignInWithGoogleRedirect,
         signInWithEmail: handleSignInWithEmail,
         signUpWithEmail: handleSignUpWithEmail,
         signInAnonymously: handleSignInAnonymously,

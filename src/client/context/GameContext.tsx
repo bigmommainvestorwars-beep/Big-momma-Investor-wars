@@ -65,6 +65,8 @@ export interface GameContextValue {
   leaveMatch: () => Promise<void>;
   addBotPlayer: (botName?: string) => Promise<void>;
   removeBotPlayer: (botId: string) => Promise<void>;
+  removeLobbyPlayer: (playerId: string) => Promise<void>;
+  resetLobby: () => Promise<void>;
   startMatch: () => Promise<void>;
 
   // Gameplay actions
@@ -775,6 +777,41 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [activeMatchId]
   );
 
+  // Remove Player from Lobby
+  const removeLobbyPlayer = useCallback(
+    async (playerId: string): Promise<void> => {
+      if (!activeMatchId) return;
+      setIsActionPending(true);
+      try {
+        const reqId = `removelobby_${Date.now()}`;
+        await cloudFunctionsClient.removeLobbyPlayer(activeMatchId, reqId, playerId);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setMatchError(msg);
+        throw err;
+      } finally {
+        setIsActionPending(false);
+      }
+    },
+    [activeMatchId]
+  );
+
+  // Reset Lobby to Host Only
+  const resetLobby = useCallback(async (): Promise<void> => {
+    if (!activeMatchId) return;
+    setIsActionPending(true);
+    try {
+      const reqId = `resetlobby_${Date.now()}`;
+      await cloudFunctionsClient.resetLobby(activeMatchId, reqId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setMatchError(msg);
+      throw err;
+    } finally {
+      setIsActionPending(false);
+    }
+  }, [activeMatchId]);
+
   // Start Match
   const startMatch = useCallback(async (): Promise<void> => {
     if (!activeMatchId) return;
@@ -1152,6 +1189,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         leaveMatch,
         addBotPlayer,
         removeBotPlayer,
+        removeLobbyPlayer,
+        resetLobby,
         startMatch,
         requestRoll,
         buyProperty,
