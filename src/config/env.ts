@@ -4,8 +4,6 @@
  * and prevents leaking server-side credentials to the client.
  */
 
-import firebaseAppletConfig from '../../firebase-applet-config.json';
-
 export type AppEnvironment = 'development' | 'staging' | 'production';
 
 export interface FirebaseClientConfig {
@@ -49,16 +47,6 @@ function resolveEnvironment(): AppEnvironment {
   return 'development';
 }
 
-function resolveFirestoreDatabaseId(): string {
-  const raw = getEnvVar('VITE_FIREBASE_FIRESTORE_DATABASE_ID') || (firebaseAppletConfig as any)?.firestoreDatabaseId || '(default)';
-  const trimmed = raw.trim();
-  // If the user or platform inadvertently provided a Realtime Database URL (e.g. https://...firebaseio.com), sanitize and fallback to '(default)'
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.includes('firebaseio.com') || !trimmed) {
-    return '(default)';
-  }
-  return trimmed;
-}
-
 const currentEnv = resolveEnvironment();
 
 export const ENV: ClientEnvConfig = {
@@ -69,13 +57,13 @@ export const ENV: ClientEnvConfig = {
   isDevelopment: currentEnv === 'development',
   useEmulator: getEnvVar('VITE_USE_FIREBASE_EMULATOR') === 'true',
   firebase: {
-    apiKey: getEnvVar('VITE_FIREBASE_API_KEY') || (firebaseAppletConfig as any)?.apiKey || '',
-    authDomain: getEnvVar('VITE_FIREBASE_AUTH_DOMAIN') || (firebaseAppletConfig as any)?.authDomain || '',
-    projectId: getEnvVar('VITE_FIREBASE_PROJECT_ID') || (firebaseAppletConfig as any)?.projectId || '',
-    storageBucket: getEnvVar('VITE_FIREBASE_STORAGE_BUCKET') || (firebaseAppletConfig as any)?.storageBucket || '',
-    messagingSenderId: getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID') || (firebaseAppletConfig as any)?.messagingSenderId || '',
-    appId: getEnvVar('VITE_FIREBASE_APP_ID') || (firebaseAppletConfig as any)?.appId || '',
-    firestoreDatabaseId: resolveFirestoreDatabaseId(),
+    apiKey: getEnvVar('VITE_FIREBASE_API_KEY'),
+    authDomain: getEnvVar('VITE_FIREBASE_AUTH_DOMAIN'),
+    projectId: getEnvVar('VITE_FIREBASE_PROJECT_ID'),
+    storageBucket: getEnvVar('VITE_FIREBASE_STORAGE_BUCKET'),
+    messagingSenderId: getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID'),
+    appId: getEnvVar('VITE_FIREBASE_APP_ID'),
+    firestoreDatabaseId: '(default)',
   },
 };
 

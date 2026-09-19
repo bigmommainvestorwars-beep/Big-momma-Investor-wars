@@ -6,15 +6,11 @@
 // Match functions
 export {
   createMatch,
-  findOrCreateQuickMatch,
-  joinMatchByAccessCode,
   joinMatch,
   leaveMatch,
   startMatch,
   getMatchState,
   reconnectMatch,
-  reconnectPlayer,
-  markPlayerDisconnected,
   addBotPlayer,
   removeBotPlayer,
 } from './match/matchFunctions';

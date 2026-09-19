@@ -6,22 +6,16 @@
 import {
   collection,
   doc,
-  setDoc,
-  getDoc,
-  getDocs,
   onSnapshot,
   query,
   where,
   orderBy,
   limit,
   Unsubscribe,
-  Firestore,
 } from 'firebase/firestore';
-import { getFirebaseFirestore, isFirebaseConfigured } from './config';
+import { getFirebaseFirestore } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
 import { PendingMarketChoiceDoc, MarketEvent } from '../../types/marketEvent';
-import { isCloudFunctionsLocalTestMode } from './cloudFunctionsClient';
-import { quickMatchDiagnosticStore } from '../quickMatchDiagnosticStore';
 
 export interface FirestoreMatchDoc {
   id: string;
@@ -93,8 +87,6 @@ export class MatchSyncService {
   private pendingChoiceListeners = new Map<string, Set<(choice: PendingMarketChoiceDoc | null) => void>>();
   private marketEventListeners = new Map<string, Set<(event: MarketEvent | null) => void>>();
   private openMatchesListeners = new Set<(matches: FirestoreMatchDoc[]) => void>();
-  private remoteMatchUpdateHandler?: (match: FirestoreMatchDoc) => void;
-  private remotePlayersUpdateHandler?: (matchId: string, players: FirestorePlayerDoc[]) => void;
   private localContainerProvider?: (matchId: string) => {
     match: FirestoreMatchDoc;
     players: FirestorePlayerDoc[];
@@ -120,14 +112,6 @@ export class MatchSyncService {
 
   public registerLocalOpenMatchesProvider(provider: () => FirestoreMatchDoc[]): void {
     this.localOpenMatchesProvider = provider;
-  }
-
-  public registerRemoteUpdateHandlers(
-    onMatchUpdate: (match: FirestoreMatchDoc) => void,
-    onPlayersUpdate: (matchId: string, players: FirestorePlayerDoc[]) => void
-  ): void {
-    this.remoteMatchUpdateHandler = onMatchUpdate;
-    this.remotePlayersUpdateHandler = onPlayersUpdate;
   }
 
   /**
@@ -227,100 +211,31 @@ export class MatchSyncService {
   }
 
   /**
-   * Persists match container to Firestore in background for cross-player multiplayer sync
-   */
-  public async syncContainerToFirestore(
-    matchId: string,
-    match: FirestoreMatchDoc,
-    players: FirestorePlayerDoc[],
-    logs: FirestoreLogDoc[],
-    activeAuction: FirestoreAuctionDoc | null,
-    pendingChoice?: PendingMarketChoiceDoc | null,
-    activeMarketEvent?: MarketEvent | null
-  ): Promise<void> {
-    const db = this.getSafeDb();
-    if (!db) return;
-
-    try {
-      // 1. Sync Match document
-      const matchRef = doc(db, 'matches', matchId);
-      await setDoc(
-        matchRef,
-        {
-          ...match,
-          updatedAt: Date.now(),
-        },
-        { merge: true }
-      );
-
-      // 2. Sync Player documents
-      for (const p of players) {
-        const pRef = doc(db, 'matches', matchId, 'players', p.id);
-        await setDoc(pRef, p, { merge: true });
-      }
-
-      // 3. Sync recent logs
-      const recentLogs = logs.slice(0, 5);
-      for (const log of recentLogs) {
-        const logRef = doc(db, 'matches', matchId, 'logs', log.id);
-        await setDoc(logRef, log, { merge: true });
-      }
-
-      // 4. Sync active auction if exists
-      if (activeAuction) {
-        const aRef = doc(db, 'matches', matchId, 'auctions', activeAuction.id);
-        await setDoc(aRef, activeAuction, { merge: true });
-      }
-
-      // 5. Sync choice / market events
-      if (pendingChoice) {
-        const cRef = doc(db, 'matches', matchId, 'marketChoices', 'current');
-        await setDoc(cRef, pendingChoice, { merge: true });
-      }
-      if (activeMarketEvent) {
-        const eRef = doc(db, 'matches', matchId, 'marketEvents', 'active');
-        await setDoc(eRef, activeMarketEvent, { merge: true });
-      }
-    } catch (err) {
-      console.warn('[MatchSyncService] Firestore sync warning:', err);
-    }
-  }
-
-  private getSafeDb(): Firestore | null {
-    if (isCloudFunctionsLocalTestMode()) return null;
-    if (!isFirebaseConfigured()) return null;
-    try {
-      return getFirebaseFirestore();
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * Subscribe to match document
    */
-   public subscribeToMatch(
+  public subscribeToMatch(
     matchId: string,
     onData: (match: FirestoreMatchDoc | null) => void,
     onError?: (err: Error) => void
   ): Unsubscribe {
-    quickMatchDiagnosticStore.recordStage('firestore_match_subscription_begins', matchId);
-    quickMatchDiagnosticStore.update({ firestoreMatchListener: 'OK' });
-
     if (!this.matchListeners.has(matchId)) {
       this.matchListeners.set(matchId, new Set());
     }
     this.matchListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
+    if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData({ ...local.match });
+        // Local authoritative match: state is purely driven by local engine events
+        return () => {
+          this.matchListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
-    const db = this.getSafeDb();
+    const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -329,28 +244,10 @@ export class MatchSyncService {
         matchRef,
         (snap) => {
           if (snap.exists()) {
-            const data = { id: snap.id, ...snap.data() } as FirestoreMatchDoc;
-            quickMatchDiagnosticStore.recordStage('firestore_match_snapshot_received', data.status);
-            quickMatchDiagnosticStore.recordStage('lobby_state_updated', data.status);
-            if (data.status === 'in_progress') {
-              quickMatchDiagnosticStore.recordStage('match_start_propagated', data.status);
-            }
-            if (this.remoteMatchUpdateHandler) {
-              try {
-                this.remoteMatchUpdateHandler(data);
-              } catch {}
-            }
-            onData(data);
-          } else if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
-            const local = this.localContainerProvider(matchId);
-            if (local) {
-              onData({ ...local.match });
-            }
+            onData({ id: snap.id, ...snap.data() } as FirestoreMatchDoc);
           }
         },
         (err) => {
-          quickMatchDiagnosticStore.update({ firestoreMatchListener: 'FAIL' });
-          quickMatchDiagnosticStore.recordError(err.name || 'firestore-match-error', err.message);
           if (onError) onError(err);
           else console.warn('Match sync warning:', err.message);
         }
@@ -371,23 +268,23 @@ export class MatchSyncService {
     onData: (players: FirestorePlayerDoc[]) => void,
     onError?: (err: Error) => void
   ): Unsubscribe {
-    quickMatchDiagnosticStore.recordStage('firestore_player_subscription_begins', matchId);
-    quickMatchDiagnosticStore.update({ firestorePlayerListener: 'OK' });
-
     if (!this.playersListeners.has(matchId)) {
       this.playersListeners.set(matchId, new Set());
     }
     this.playersListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
+    if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
-      if (local && local.players.length > 0) {
+      if (local) {
         onData([...local.players]);
+        return () => {
+          this.playersListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
-    const db = this.getSafeDb();
+    const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -397,34 +294,9 @@ export class MatchSyncService {
         (snap) => {
           const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
           players.sort((a, b) => a.turnOrder - b.turnOrder);
-
-          quickMatchDiagnosticStore.recordStage('firestore_player_snapshot_received', `count=${players.length}`);
-          const playerNames = players.map(p => p.displayName || p.id);
-          quickMatchDiagnosticStore.update({ lobbyPlayers: playerNames });
-
-          if (players.length >= 2) {
-            quickMatchDiagnosticStore.recordStage('second_player_joined', `total=${players.length}`);
-          }
-
-          // If snapshot is empty but local container has players, preserve local players
-          if (players.length === 0 && isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
-            const local = this.localContainerProvider(matchId);
-            if (local && local.players.length > 0) {
-              onData([...local.players]);
-              return;
-            }
-          }
-
-          if (players.length > 0 && this.remotePlayersUpdateHandler) {
-            try {
-              this.remotePlayersUpdateHandler(matchId, players);
-            } catch {}
-          }
           onData(players);
         },
         (err) => {
-          quickMatchDiagnosticStore.update({ firestorePlayerListener: 'FAIL' });
-          quickMatchDiagnosticStore.recordError(err.name || 'firestore-player-error', err.message);
           if (onError) onError(err);
           else console.warn('Players sync warning:', err.message);
         }
@@ -451,14 +323,17 @@ export class MatchSyncService {
     this.logsListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
+    if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.logs]);
+        return () => {
+          this.logsListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
-    const db = this.getSafeDb();
+    const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
     let fallbackUnsub: Unsubscribe = () => {};
 
@@ -518,14 +393,17 @@ export class MatchSyncService {
     this.auctionListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
+    if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeAuction ? { ...local.activeAuction } : null);
+        return () => {
+          this.auctionListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
-    const db = this.getSafeDb();
+    const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -564,7 +442,7 @@ export class MatchSyncService {
   ): Unsubscribe {
     this.openMatchesListeners.add(onData);
 
-    if (isCloudFunctionsLocalTestMode() && this.localOpenMatchesProvider) {
+    if (this.localOpenMatchesProvider) {
       try {
         const localMatches = this.localOpenMatchesProvider();
         if (localMatches.length > 0) {
@@ -575,7 +453,7 @@ export class MatchSyncService {
       }
     }
 
-    const db = this.getSafeDb();
+    const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -588,7 +466,7 @@ export class MatchSyncService {
           const remoteMatches = snap.docs
             .map((d) => ({ id: d.id, ...d.data() } as FirestoreMatchDoc))
             .filter((m) => !m.isPrivate);
-          const localMatches = isCloudFunctionsLocalTestMode() && this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
           // Combine unique matches
           const matchMap = new Map<string, FirestoreMatchDoc>();
           for (const m of localMatches) matchMap.set(m.id, m);
@@ -597,14 +475,14 @@ export class MatchSyncService {
         },
         (err) => {
           // Gracefully default to local open matches if unauthenticated or security rules active
-          const localMatches = isCloudFunctionsLocalTestMode() && this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
           onData(localMatches);
           if (onError) onError(err);
           else console.warn('Lobby sync warning:', err.message);
         }
       );
     } else {
-      const localMatches = isCloudFunctionsLocalTestMode() && this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+      const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
       onData(localMatches);
     }
 
@@ -628,14 +506,17 @@ export class MatchSyncService {
     this.pendingChoiceListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
+    if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.pendingChoice ? { ...local.pendingChoice } : null);
+        return () => {
+          this.pendingChoiceListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
-    const db = this.getSafeDb();
+    const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -676,14 +557,17 @@ export class MatchSyncService {
     this.marketEventListeners.get(matchId)!.add(onData);
 
     // Initial local dispatch if available
-    if (isCloudFunctionsLocalTestMode() && this.localContainerProvider) {
+    if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeMarketEvent ? { ...local.activeMarketEvent } : null);
+        return () => {
+          this.marketEventListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
-    const db = this.getSafeDb();
+    const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
 
     if (db) {
@@ -712,4 +596,3 @@ export class MatchSyncService {
 }
 
 export const matchSyncService = new MatchSyncService();
-

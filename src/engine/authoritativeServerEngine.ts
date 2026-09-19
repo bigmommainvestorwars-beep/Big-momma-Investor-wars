@@ -71,69 +71,6 @@ export class AuthoritativeServerEngine {
       };
     });
     matchSyncService.registerLocalOpenMatchesProvider(() => this.getOpenMatches());
-    matchSyncService.registerRemoteUpdateHandlers(
-      (remoteMatch) => {
-        const local = this.matches.get(remoteMatch.id);
-        if (local) {
-          if (remoteMatch.stateVersion >= local.match.stateVersion) {
-            local.match = { ...local.match, ...remoteMatch };
-          }
-        } else {
-          this.hydrateMatch(remoteMatch, []);
-        }
-      },
-      (matchId, remotePlayers) => {
-        const local = this.matches.get(matchId);
-        if (local && remotePlayers && remotePlayers.length > 0) {
-          for (const p of remotePlayers) {
-            local.players.set(p.id, p);
-          }
-          local.match.participantUserIds = Array.from(
-            new Set([...local.match.participantUserIds, ...remotePlayers.map((p) => p.userId)])
-          );
-        }
-      }
-    );
-  }
-
-  public hydrateMatch(
-    matchDoc: FirestoreMatchDoc,
-    playersList: FirestorePlayerDoc[],
-    logsList: FirestoreLogDoc[] = [],
-    activeAuction: FirestoreAuctionDoc | null = null,
-    pendingChoice: PendingMarketChoiceDoc | null = null,
-    activeMarketEvent: MarketEvent | null = null
-  ): AuthoritativeMatchContainer {
-    const existing = this.matches.get(matchDoc.id);
-    const playersMap = new Map<string, FirestorePlayerDoc>();
-    for (const p of playersList) {
-      playersMap.set(p.id, p);
-    }
-    if (existing) {
-      existing.match = { ...existing.match, ...matchDoc };
-      if (playersList.length > 0) {
-        for (const p of playersList) {
-          existing.players.set(p.id, p);
-        }
-      }
-      if (logsList.length > 0) existing.logs = logsList;
-      if (activeAuction !== undefined) existing.activeAuction = activeAuction;
-      if (pendingChoice !== undefined) existing.pendingMarketChoice = pendingChoice;
-      if (activeMarketEvent !== undefined) existing.activeMarketEvent = activeMarketEvent;
-      return existing;
-    }
-
-    const container: AuthoritativeMatchContainer = {
-      match: matchDoc,
-      players: playersMap,
-      logs: logsList,
-      activeAuction,
-      activeModifiers: [],
-      pendingMarketChoice: pendingChoice,
-      activeMarketEvent,
-    };
-    this.matches.set(matchDoc.id, container);
-    return container;
   }
 
   public getOpenMatches(): FirestoreMatchDoc[] {
@@ -190,19 +127,6 @@ export class AuthoritativeServerEngine {
       container.pendingMarketChoice,
       container.activeMarketEvent
     );
-    matchSyncService
-      .syncContainerToFirestore(
-        container.match.id,
-        container.match,
-        playersList,
-        container.logs,
-        container.activeAuction,
-        container.pendingMarketChoice,
-        container.activeMarketEvent
-      )
-      .catch((err) => {
-        console.warn('[AuthoritativeServerEngine] Background Firestore sync non-fatal:', err);
-      });
   }
 
   private assertMatchActive(match: FirestoreMatchDoc): void {
@@ -333,20 +257,7 @@ export class AuthoritativeServerEngine {
     botName?: string,
     personality: string = 'balanced'
   ): FirestorePlayerDoc {
-    let container = this.matches.get(matchId);
-    if (!container) {
-      this.createMatch(
-        matchId,
-        requestId,
-        'default-standard-board',
-        '1.0.0',
-        'local_founder_1',
-        'Investor (You)',
-        false,
-        `BM-${matchId.slice(-4).toUpperCase()}`
-      );
-      container = this.matches.get(matchId);
-    }
+    const container = this.matches.get(matchId);
     if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
     if (container.match.status !== 'waiting_for_players') {
       throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Cannot add bots to an ongoing match.');
@@ -611,24 +522,14 @@ export class AuthoritativeServerEngine {
     userId: string,
     displayName: string
   ): { matchId: string; player: FirestorePlayerDoc } {
-    const cleanCode = accessCode.trim().toUpperCase().replace(/\s+/g, '');
-    const cleanWithoutPrefix = cleanCode.replace(/^BM-/, '');
-    const cleanWithPrefix = cleanCode.startsWith('BM-') ? cleanCode : `BM-${cleanCode}`;
-
+    const cleanCode = accessCode.trim().toUpperCase();
     for (const [id, container] of this.matches.entries()) {
-      const matchCode = (container.match.accessCode || '').toUpperCase().replace(/\s+/g, '');
-      const matchWithoutPrefix = matchCode.replace(/^BM-/, '');
+      const matchCode = (container.match.accessCode || '').toUpperCase();
       const matchIdClean = id.toUpperCase();
-      const matchIdEnd = id.slice(-4).toUpperCase();
-
-      const isMatch =
-        matchCode === cleanCode ||
-        matchCode === cleanWithPrefix ||
-        matchWithoutPrefix === cleanWithoutPrefix ||
-        matchIdClean === cleanCode ||
-        matchIdEnd === cleanWithoutPrefix;
-
-      if (isMatch && container.match.status === 'waiting_for_players') {
+      if (
+        (matchCode === cleanCode || matchIdClean === cleanCode) &&
+        container.match.status === 'waiting_for_players'
+      ) {
         const player = this.joinMatch(id, requestId, userId, displayName);
         return { matchId: id, player };
       }

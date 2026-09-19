@@ -9,13 +9,12 @@ export const MatchSetupScreen: React.FC = () => {
   const { createCustomBotMatch, isActionPending, matchError } = useGame();
   
   const [botCount, setBotCount] = useState<number>(3);
-  const [difficulty, setDifficulty] = useState<'EASY' | 'NORMAL' | 'HARD'>('EASY');
   const [localError, setLocalError] = useState<string | null>(null);
 
   const handleStart = async () => {
     setLocalError(null);
     try {
-      await createCustomBotMatch(botCount, difficulty);
+      await createCustomBotMatch(botCount);
       navigate('GAMEPLAY');
     } catch (e: any) {
       console.error('Failed to create match', e);
@@ -28,20 +27,14 @@ export const MatchSetupScreen: React.FC = () => {
   return (
     <div className="absolute inset-0 bg-[#030712] text-slate-100 font-sans flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="h-16 px-6 border-b border-slate-800 bg-slate-950/80 backdrop-blur-md flex items-center justify-between gap-4 shrink-0 z-10">
-        <div className="flex items-center gap-4">
-          <button 
-            onClick={goBack}
-            className="w-10 h-10 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <h1 className="text-sm font-black uppercase tracking-widest text-slate-100">MATCH SETUP</h1>
-        </div>
-        <div className="px-3 py-1 bg-emerald-950/60 border border-emerald-500/40 rounded-full text-emerald-400 font-mono text-xs font-bold tracking-widest uppercase flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-          LOCAL BOT MATCH
-        </div>
+      <div className="h-16 px-6 border-b border-slate-800 bg-slate-950/80 backdrop-blur-md flex items-center gap-4 shrink-0 z-10">
+        <button 
+          onClick={goBack}
+          className="w-10 h-10 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <h1 className="text-sm font-black uppercase tracking-widest text-slate-100">MATCH SETUP</h1>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex items-center justify-center bg-gradient-to-b from-slate-900 to-[#030712]">
@@ -52,7 +45,7 @@ export const MatchSetupScreen: React.FC = () => {
         >
           <h2 className="text-xl font-black text-emerald-400 uppercase tracking-widest mb-6 flex items-center gap-3">
             <Users className="w-6 h-6" />
-            AI Training Simulation & Bot Match
+            AI Training Simulation
           </h2>
           
           <div className="space-y-6 sm:space-y-8">
@@ -65,7 +58,7 @@ export const MatchSetupScreen: React.FC = () => {
 
             <div className="space-y-4">
               <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                Select AI Opponents Count (1 to 3 Bots)
+                Select AI Opponents
               </label>
               <div className="grid grid-cols-3 gap-3 sm:gap-4">
                 {[1, 2, 3].map(num => (
@@ -87,38 +80,11 @@ export const MatchSetupScreen: React.FC = () => {
               </div>
             </div>
 
-            <div className="space-y-4">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                AI Difficulty Level
-              </label>
-              <div className="grid grid-cols-3 gap-3 sm:gap-4">
-                {(['EASY', 'NORMAL', 'HARD'] as const).map(level => (
-                  <button
-                    key={level}
-                    onClick={() => setDifficulty(level)}
-                    className={`py-3 rounded-xl text-center border transition-all cursor-pointer ${
-                      difficulty === level 
-                      ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.2)]' 
-                      : 'bg-slate-950/50 border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-300'
-                    }`}
-                  >
-                    <span className="font-bold tracking-wider uppercase text-xs sm:text-sm">
-                      {level}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="p-4 rounded-xl bg-slate-950/50 border border-slate-800 space-y-2">
               <div className="text-xs font-mono text-slate-400 uppercase tracking-wider">Simulation Parameters</div>
               <div className="flex justify-between text-xs sm:text-sm">
                 <span className="text-slate-500">Board Configuration</span>
                 <span className="text-slate-300 font-bold">Standard 52-Space Circular</span>
-              </div>
-              <div className="flex justify-between text-xs sm:text-sm">
-                <span className="text-slate-500">Network Mode</span>
-                <span className="text-emerald-400 font-bold">Local Authoritative (No Firebase Required)</span>
               </div>
               <div className="flex justify-between text-xs sm:text-sm">
                 <span className="text-slate-500">Currency</span>

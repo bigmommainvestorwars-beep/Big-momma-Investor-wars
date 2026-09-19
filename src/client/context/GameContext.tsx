@@ -6,8 +6,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { enableNetwork } from 'firebase/firestore';
-import { getFirebaseFirestore, getFirebaseAuth } from '../../services/firebase/config';
-import { quickMatchDiagnosticStore } from '../../services/quickMatchDiagnosticStore';
+import { getFirebaseFirestore } from '../../services/firebase/config';
 import { GameState } from '../../types/game';
 import { ActionRequest } from '../../types/request';
 import { firestoreService } from '../../services/firebase/firestoreService';
@@ -177,7 +176,7 @@ function formatUserFacingMatchError(err: unknown): string {
 }
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, isAuthenticated, isLoading: isAuthLoading } = useAuth();
+  const { isAuthenticated, isLoading: isAuthLoading } = useAuth();
   const [activeMatchId, setActiveMatchId] = useState<string | null>(null);
   const [match, setMatch] = useState<FirestoreMatchDoc | null>(null);
   const [players, setPlayers] = useState<FirestorePlayerDoc[]>([]);
@@ -440,50 +439,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Start Quick-Match Queue (automatically finds open public lobby or creates one)
   const startQuickMatchQueue = useCallback(async (): Promise<string> => {
-    quickMatchDiagnosticStore.recordStage('user_tapped_quick_match');
-
-    const auth = getFirebaseAuth();
-    const currentUser = auth?.currentUser;
-    if (!currentUser || !isAuthenticated) {
-      quickMatchDiagnosticStore.update({ authStatus: 'FAIL' });
+    if (!isAuthenticated) {
       const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to join matchmaking.';
-      quickMatchDiagnosticStore.recordError('AUTH_REQUIRED', errorMsg);
       setMatchError(errorMsg);
       const err = new Error(errorMsg);
       (err as any).code = 'AUTH_REQUIRED';
       throw err;
     }
-    quickMatchDiagnosticStore.update({ authStatus: 'OK' });
-    quickMatchDiagnosticStore.recordStage('auth_user_checked', currentUser.uid);
-
-    try {
-      if (currentUser?.getIdToken) {
-        await currentUser.getIdToken();
-        quickMatchDiagnosticStore.recordStage('id_token_obtained');
-      }
-    } catch (tokenErr: any) {
-      console.warn('[GameContext] Token acquisition notice (offline/local):', tokenErr);
-      quickMatchDiagnosticStore.recordStage('id_token_fallback_local');
-    }
-
-    try {
-      const appCheckModule = await import('firebase/app-check');
-      const appCheckInstance = (appCheckModule as any).getAppCheck ? (appCheckModule as any).getAppCheck() : null;
-      if (appCheckInstance && (appCheckModule as any).getToken) {
-        const appCheckResult = await (appCheckModule as any).getToken(appCheckInstance, false);
-        if (appCheckResult && appCheckResult.token) {
-          quickMatchDiagnosticStore.update({ appCheckStatus: 'OK' });
-        } else {
-          quickMatchDiagnosticStore.update({ appCheckStatus: 'FAIL' });
-        }
-      } else {
-        quickMatchDiagnosticStore.update({ appCheckStatus: 'UNKNOWN' });
-      }
-    } catch {
-      quickMatchDiagnosticStore.update({ appCheckStatus: 'UNKNOWN' });
-    }
-    quickMatchDiagnosticStore.recordStage('app_check_checked');
-
     setMatchError(null);
     setMatchmakingQueueState('searching');
     setQueueTimeSeconds(0);
@@ -493,56 +455,25 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await new Promise((resolve) => setTimeout(resolve, 800));
 
       const reqId = `qm_${Date.now()}`;
-      quickMatchDiagnosticStore.recordStage('cloud_function_invocation_begins', reqId);
-      quickMatchDiagnosticStore.recordStage('callable_function_name', 'findOrCreateQuickMatch');
-      quickMatchDiagnosticStore.update({ functionStatus: 'PENDING' });
-
-      const res = await cloudFunctionsClient.findOrCreateQuickMatch(
-        reqId,
-        user?.displayName || 'Investor'
-      );
-
-      quickMatchDiagnosticStore.recordStage('cloud_function_returns');
-
-      if (!res.success || res.error) {
-        quickMatchDiagnosticStore.update({ functionStatus: 'FAIL' });
-        const errCode = res.error?.code || 'internal';
-        const errMsg = res.error?.message || 'Quick match function returned error success=false';
-        quickMatchDiagnosticStore.recordError(errCode, errMsg);
-        const err = new Error(errMsg);
-        (err as any).code = errCode;
-        throw err;
-      }
-
-      quickMatchDiagnosticStore.update({ functionStatus: 'OK' });
+      const res = await cloudFunctionsClient.findOrCreateQuickMatch(reqId);
       setMatchmakingQueueState('matched');
 
       await new Promise((resolve) => setTimeout(resolve, 400));
       setMatchmakingQueueState('joining');
 
       const matchId = res.data?.matchId;
-      const playerId = res.data?.player?.id || res.data?.player?.uid || null;
-
       if (!matchId) throw new Error('Failed to resolve matchmaking room.');
-
-      quickMatchDiagnosticStore.recordStage('match_id_returned', matchId);
-      quickMatchDiagnosticStore.recordStage('player_id_returned', playerId || 'unknown');
-      quickMatchDiagnosticStore.update({ matchId, playerId });
 
       setActiveMatchId(matchId);
       setMatchmakingQueueState('idle');
       return matchId;
-    } catch (err: any) {
+    } catch (err) {
       setMatchmakingQueueState('idle');
-      quickMatchDiagnosticStore.update({ functionStatus: 'FAIL' });
-      const errCode = err?.code || err?.details?.code || 'internal';
-      const errMsg = err?.message || String(err);
-      quickMatchDiagnosticStore.recordError(errCode, errMsg);
       const msg = formatUserFacingMatchError(err);
       setMatchError(msg);
       throw err;
     }
-  }, [isAuthenticated, user?.displayName]);
+  }, [isAuthenticated]);
 
   const cancelQuickMatchQueue = useCallback(() => {
     setMatchmakingQueueState('idle');
@@ -576,22 +507,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         (err as any).code = 'AUTH_REQUIRED';
         throw err;
       }
-      const trimmedCode = code.trim();
-      if (!trimmedCode) {
-        setMatchError('Please enter a valid room code.');
-        throw new Error('Please enter a valid room code.');
-      }
       setIsActionPending(true);
       setMatchError(null);
       try {
         const reqId = `join_code_${Date.now()}`;
-        const res = await cloudFunctionsClient.joinMatchByAccessCode(
-          trimmedCode,
-          reqId,
-          user?.displayName || 'Investor (Player)'
-        );
+        const res = await cloudFunctionsClient.joinMatchByAccessCode(code, reqId);
         const matchId = res.data?.matchId;
-        if (!matchId) throw new Error(`No lobby found for code "${trimmedCode}".`);
+        if (!matchId) throw new Error(`No lobby found for code "${code}".`);
         setActiveMatchId(matchId);
       } catch (err) {
         const msg = formatUserFacingMatchError(err);
@@ -601,7 +523,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated, user?.displayName]
+    [isAuthenticated]
   );
 
   const createPrivateMatch = useCallback(async (): Promise<string> => {
@@ -624,8 +546,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         'default-standard-board',
         '1.0.0',
         true,
-        accessCode,
-        user?.displayName || 'Investor (Host)'
+        accessCode
       );
       setActiveMatchId(newMatchId);
       return newMatchId;
@@ -636,7 +557,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [isAuthenticated, user?.displayName]);
+  }, [isAuthenticated]);
 
   // Create Match
   const createMatch = useCallback(

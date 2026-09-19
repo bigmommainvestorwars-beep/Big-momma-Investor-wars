@@ -9,39 +9,15 @@ import { User, AuthState } from '../../types/auth';
 import { authService } from '../../services/firebase/authService';
 import { setCloudFunctionsLocalTestMode } from '../../services/firebase/cloudFunctionsClient';
 
-export function getOrCreateLocalGuestUser(): User {
-  let uid = '';
-  let displayName = '';
-  try {
-    uid = localStorage.getItem('bm_user_uid') || '';
-    displayName = localStorage.getItem('bm_user_name') || '';
-  } catch {
-    // ignore localstorage error
-  }
-
-  if (!uid) {
-    uid = `investor_${Math.random().toString(36).substring(2, 9)}`;
-    displayName = `Investor ${uid.slice(-4).toUpperCase()}`;
-    try {
-      localStorage.setItem('bm_user_uid', uid);
-      localStorage.setItem('bm_user_name', displayName);
-    } catch {
-      // ignore
-    }
-  }
-
-  return {
-    uid,
-    email: `${uid}@investorwars.dev`,
-    displayName: displayName || 'Investor',
-    photoURL: null,
-    emailVerified: true,
-    createdAt: Date.now(),
-    lastLoginAt: Date.now(),
-  };
-}
-
-export const DEFAULT_LOCAL_TEST_USER: User = getOrCreateLocalGuestUser();
+export const DEFAULT_LOCAL_TEST_USER: User = {
+  uid: 'local_founder_1',
+  email: 'founder@investorwars.dev',
+  displayName: 'Investor (You)',
+  photoURL: null,
+  emailVerified: true,
+  createdAt: Date.now(),
+  lastLoginAt: Date.now(),
+};
 
 interface AuthContextValue extends AuthState {
   isLocalTestMode: boolean;
@@ -58,8 +34,9 @@ interface AuthContextValue extends AuthState {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [mockUser, setMockUser] = useState<User | null>(() => getOrCreateLocalGuestUser());
-  const [isLocalTestMode, setIsLocalTestModeState] = useState<boolean>(() => !authService.isConfigured());
+  // DEVELOPMENT/LOCAL TEST MODE active by default to allow offline gameplay testing without Firebase
+  const [isLocalTestMode, setIsLocalTestModeState] = useState<boolean>(true);
+  const [mockUser, setMockUser] = useState<User | null>(DEFAULT_LOCAL_TEST_USER);
   const [firebaseAuthState, setFirebaseAuthState] = useState<AuthState>({
     isAuthenticated: false,
     user: null,
@@ -73,19 +50,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const switchMockUser = (displayName: string, email?: string) => {
-    const currentUid = mockUser?.uid || getOrCreateLocalGuestUser().uid;
     const updatedUser: User = {
-      uid: currentUid,
-      email: email || `${currentUid}@investorwars.dev`,
-      displayName: displayName || `Investor ${currentUid.slice(-4).toUpperCase()}`,
+      uid: 'local_founder_1',
+      email: email || 'founder@investorwars.dev',
+      displayName: displayName || 'Investor (You)',
       photoURL: null,
       emailVerified: true,
       createdAt: Date.now(),
       lastLoginAt: Date.now(),
     };
-    try {
-      localStorage.setItem('bm_user_name', updatedUser.displayName || '');
-    } catch {}
     setMockUser(updatedUser);
   };
 
@@ -101,36 +74,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     const unsubscribe = authService.onAuthStateChanged((user) => {
-      if (user) {
-        setFirebaseAuthState({
-          isAuthenticated: true,
-          user,
-          isLoading: false,
-          error: null,
-        });
-        setIsLocalTestModeState(false);
-      } else {
-        // Auto sign in anonymously if Firebase is active but user is not signed in
-        authService
-          .signInAnonymously()
-          .then((anonUser) => {
-            setFirebaseAuthState({
-              isAuthenticated: true,
-              user: anonUser,
-              isLoading: false,
-              error: null,
-            });
-            setIsLocalTestModeState(false);
-          })
-          .catch(() => {
-            setFirebaseAuthState({
-              isAuthenticated: false,
-              user: null,
-              isLoading: false,
-              error: null,
-            });
-          });
-      }
+      setFirebaseAuthState({
+        isAuthenticated: Boolean(user),
+        user,
+        isLoading: false,
+        error: null,
+      });
     });
 
     return () => unsubscribe();

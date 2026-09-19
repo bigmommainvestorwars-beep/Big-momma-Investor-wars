@@ -4,17 +4,9 @@
  */
 
 import { httpsCallable } from 'firebase/functions';
-import { doc, getDoc, getDocs, collection, query, where, limit } from 'firebase/firestore';
-import { getFirebaseFunctions, getFirebaseAuth, getFirebaseFirestore } from './config';
+import { getFirebaseFunctions, getFirebaseAuth } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
 import { authoritativeServerEngine } from '../../engine/authoritativeServerEngine';
-import { ENV } from '../../config/env';
-import {
-  FirestoreMatchDoc,
-  FirestorePlayerDoc,
-  FirestoreLogDoc,
-  FirestoreAuctionDoc,
-} from './matchSyncService';
 
 export interface ServerRequestEnvelope<T = unknown> {
   matchId: string;
@@ -38,56 +30,14 @@ export interface ServerResponseEnvelope<T = unknown> {
   };
 }
 
-function resolveInitialLocalTestMode(): boolean {
-  const explicitFalse = typeof window !== 'undefined' ? window.localStorage.getItem('bm_local_test_mode') === 'false' : false;
-  if (explicitFalse) return false;
-  return true; // Default to local authoritative engine for offline/bot testing mode
-}
-
-let cloudFunctionsLocalTestMode = resolveInitialLocalTestMode();
+let cloudFunctionsLocalTestMode = true;
 
 export function setCloudFunctionsLocalTestMode(enabled: boolean): void {
   cloudFunctionsLocalTestMode = enabled;
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem('bm_local_test_mode', String(enabled));
-  }
 }
 
 export function isCloudFunctionsLocalTestMode(): boolean {
   return cloudFunctionsLocalTestMode;
-}
-
-async function ensureMatchHydratedFromFirestore(matchId: string): Promise<boolean> {
-  if (!matchId || matchId === 'system' || matchId === 'matchmaking' || cloudFunctionsLocalTestMode) return false;
-  const db = getFirebaseFirestore();
-  if (!db) return false;
-  try {
-    const matchSnap = await getDoc(doc(db, 'matches', matchId));
-    if (!matchSnap.exists()) return false;
-    const matchData = { id: matchSnap.id, ...matchSnap.data() } as FirestoreMatchDoc;
-
-    // Fetch players
-    const playersSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
-    const playersList = playersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
-
-    // Fetch logs
-    const logsSnap = await getDocs(query(collection(db, 'matches', matchId, 'logs'), limit(20)));
-    const logsList = logsSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
-
-    // Fetch auction
-    const aucSnap = await getDocs(
-      query(collection(db, 'matches', matchId, 'auctions'), where('status', '==', 'active'), limit(1))
-    );
-    const activeAuction = !aucSnap.empty
-      ? ({ id: aucSnap.docs[0].id, ...aucSnap.docs[0].data() } as FirestoreAuctionDoc)
-      : null;
-
-    authoritativeServerEngine.hydrateMatch(matchData, playersList, logsList, activeAuction);
-    return true;
-  } catch (e) {
-    console.warn('[CloudFunctionsClient] Match hydration error:', e);
-    return false;
-  }
 }
 
 export class CloudFunctionsClient {
@@ -95,52 +45,68 @@ export class CloudFunctionsClient {
     functionName: string,
     data: ServerRequestEnvelope<TReq>
   ): Promise<ServerResponseEnvelope<TRes>> {
+    // In DEVELOPMENT/LOCAL TEST MODE, bypass Cloud Functions network calls and execute via Authoritative Local Engine
     if (cloudFunctionsLocalTestMode) {
-      console.info(`[CloudFunctionsClient] Executing '${functionName}' in explicit LOCAL authoritative test mode.`);
       return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
     }
 
     try {
       const functions = getFirebaseFunctions();
-      if (!functions) {
-        throw new Error('Firebase Functions SDK is not initialized.');
-      }
       const callable = httpsCallable<ServerRequestEnvelope<TReq>, ServerResponseEnvelope<TRes>>(
         functions,
         functionName
       );
       const result = await callable(data);
-      if (!result || !result.data) {
-        throw new Error(`Empty response received from Cloud Function '${functionName}'.`);
-      }
       return result.data;
     } catch (err: unknown) {
-      console.warn(
-        `[CloudFunctionsClient] Firebase callable '${functionName}' unavailable (${(err as any)?.code || err}). Executing fallback to local authoritative engine.`
-      );
-      return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errCode = (err as { code?: string })?.code || '';
+      const isNotFoundOrUnavailable =
+        errCode === 'functions/not-found' ||
+        errCode === 'not-found' ||
+        errCode === 'functions/unavailable' ||
+        errMsg.includes('not-found') ||
+        errMsg.includes('404') ||
+        errMsg.includes('failed to fetch');
+
+      if (isNotFoundOrUnavailable) {
+        // Authoritative server execution fallback
+        return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
+      }
+
+      const anyErr = err as any;
+      const detailsCode = anyErr?.details?.code;
+      const isAuthRequired =
+        errCode === 'unauthenticated' ||
+        errCode === 'functions/unauthenticated' ||
+        errCode === 'AUTH_REQUIRED' ||
+        detailsCode === 'AUTH_REQUIRED' ||
+        errMsg.includes('AUTH_REQUIRED') ||
+        errMsg.includes('Authentication required');
+
+      errorHandler.capture(err, {
+        errorCode: isAuthRequired ? 'AUTH_REQUIRED' : 'CLOUD_FUNCTION_CALL_FAILED',
+        action: functionName,
+        requestId: data.requestId,
+        details: {
+          originalErrorCode: errCode,
+          originalMessage: errMsg,
+          details: anyErr?.details,
+        },
+      });
+      throw err;
     }
   }
 
-  private async executeAuthoritativeLocal<TReq, TRes>(
+  private executeAuthoritativeLocal<TReq, TRes>(
     functionName: string,
     data: ServerRequestEnvelope<TReq>
-  ): Promise<ServerResponseEnvelope<TRes>> {
+  ): ServerResponseEnvelope<TRes> {
     const auth = getFirebaseAuth();
     const p = (data.payload || {}) as Record<string, unknown>;
-    let currentUserId =
-      (p.actingPlayerId as string) || (p.botId as string) || auth?.currentUser?.uid || '';
-    if (!currentUserId) {
-      try {
-        currentUserId = localStorage.getItem('bm_user_uid') || '';
-      } catch {}
-      if (!currentUserId) currentUserId = 'local_founder_1';
-    }
+    const currentUserId =
+      (p.actingPlayerId as string) || (p.botId as string) || auth?.currentUser?.uid || 'local_founder_1';
     const currentDisplayName = (p.displayName as string) || auth?.currentUser?.displayName || 'Investor (You)';
-
-    if (data.matchId && data.matchId !== 'system') {
-      await ensureMatchHydratedFromFirestore(data.matchId);
-    }
 
     let resultData: unknown = null;
 
@@ -150,14 +116,13 @@ export class CloudFunctionsClient {
         const rulesetVersion = (p.rulesetVersion as string) || '1.0.0';
         const isPrivate = (p.isPrivate as boolean) || false;
         const accessCode = p.accessCode as string | undefined;
-        const hostDisplayName = (p.displayName as string) || currentDisplayName;
         resultData = authoritativeServerEngine.createMatch(
           data.matchId,
           data.requestId,
           boardId,
           rulesetVersion,
           currentUserId,
-          hostDisplayName,
+          currentDisplayName,
           isPrivate,
           accessCode
         );
@@ -176,9 +141,8 @@ export class CloudFunctionsClient {
         break;
       }
       case 'joinMatchByAccessCode': {
-        const rawCode = String(p.accessCode || '').trim();
         resultData = authoritativeServerEngine.joinMatchByAccessCode(
-          rawCode,
+          p.accessCode as string,
           data.requestId,
           currentUserId,
           (p.displayName as string) || currentDisplayName
@@ -383,8 +347,7 @@ export class CloudFunctionsClient {
     boardId: string = 'default-standard-board',
     rulesetVersion: string = '1.0.0',
     isPrivate: boolean = false,
-    accessCode?: string,
-    displayName?: string
+    accessCode?: string
   ) {
     return this.call<
       {
@@ -392,13 +355,12 @@ export class CloudFunctionsClient {
         rulesetVersion?: string;
         isPrivate?: boolean;
         accessCode?: string;
-        displayName?: string;
       },
       unknown
     >('createMatch', {
       matchId,
       requestId,
-      payload: { boardId, rulesetVersion, isPrivate, accessCode, displayName },
+      payload: { boardId, rulesetVersion, isPrivate, accessCode },
     });
   }
 

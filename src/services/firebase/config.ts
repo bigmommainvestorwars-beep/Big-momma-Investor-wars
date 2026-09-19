@@ -12,8 +12,6 @@ import {
   Firestore,
   connectFirestoreEmulator,
   setLogLevel,
-  persistentLocalCache,
-  persistentMultipleTabManager,
 } from 'firebase/firestore';
 import { getFunctions, Functions, connectFunctionsEmulator } from 'firebase/functions';
 import { ENV, validateFirebaseClientConfig } from '../../config/env';
@@ -115,24 +113,15 @@ export function getFirebaseFirestore(): Firestore {
     // Ignore if setLogLevel is unavailable
   }
 
-  let rawDbId = (ENV.firebase.firestoreDatabaseId || '').trim();
-  if (rawDbId.startsWith('http://') || rawDbId.startsWith('https://') || rawDbId.includes('firebaseio.com') || rawDbId === '(default)') {
-    rawDbId = '';
-  }
-  const dbId = rawDbId ? rawDbId : undefined;
+  const dbId =
+    ENV.firebase.firestoreDatabaseId && ENV.firebase.firestoreDatabaseId !== '(default)'
+      ? ENV.firebase.firestoreDatabaseId
+      : undefined;
 
-  const firestoreSettings: any = {
+  const firestoreSettings = {
     experimentalAutoDetectLongPolling: true,
     ignoreUndefinedProperties: true,
   };
-
-  try {
-    firestoreSettings.localCache = persistentLocalCache({
-      tabManager: persistentMultipleTabManager(),
-    });
-  } catch {
-    // Fallback if local cache persistence is restricted in sandbox
-  }
 
   try {
     cachedDb = dbId
