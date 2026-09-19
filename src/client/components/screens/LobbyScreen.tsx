@@ -73,9 +73,9 @@ export const LobbyScreen: React.FC = () => {
     }
   };
 
-  const totalSeats = 4;
-  const occupiedSeats = players.length;
-  const emptySeats = Math.max(0, totalSeats - occupiedSeats);
+  const maxPlayers = 2;
+  const playerCount = players.length;
+  const emptySeats = Math.max(0, maxPlayers - playerCount);
 
   return (
     <div className="absolute inset-0 bg-[#030712] text-slate-100 font-sans flex items-center justify-center p-4 sm:p-6 overflow-y-auto">
@@ -94,7 +94,9 @@ export const LobbyScreen: React.FC = () => {
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
               <span>Multiplayer Room Active</span>
               <span className="text-slate-600">•</span>
-              <span className="text-cyan-300 font-mono font-black">{players.length}/2 players</span>
+              <span className="text-cyan-300 font-mono font-black">
+                {playerCount}/{maxPlayers} {playerCount >= maxPlayers ? 'Ready to Start' : 'Waiting for Player 2'}
+              </span>
             </div>
             <h1 className="text-xl sm:text-2xl font-black uppercase tracking-wider text-white">
               INVESTOR LOBBY ROOM CODE: {accessCode}
@@ -132,9 +134,113 @@ export const LobbyScreen: React.FC = () => {
           </div>
         )}
 
-        {/* Players List (4 Seats) */}
+        {/* Investor Lobby Slots (2 Slots: Player 1 & Player 2) */}
         <div className="space-y-3 mb-6 text-left">
-          {players.map((p, idx) => (
+          {/* Slot 1: Player 1 (Host) */}
+          {players[0] ? (
+            <div
+              id="player-slot-1"
+              className="flex items-center gap-3.5 bg-slate-950/70 border border-slate-800 p-3.5 rounded-2xl transition-all"
+            >
+              <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0 border border-slate-700/60">
+                {players[0].isBot ? (
+                  <Bot className="w-5 h-5 text-purple-400" />
+                ) : (
+                  <User className="w-5 h-5 text-emerald-400" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-slate-100 text-sm truncate flex items-center gap-2">
+                  <span>{players[0].displayName}</span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono uppercase">
+                    Player 1 (Host)
+                  </span>
+                </div>
+                <div className="text-[10px] uppercase tracking-wider font-mono text-slate-500 flex items-center gap-2">
+                  <span>{players[0].isBot ? 'AI Bot' : 'Human Player'}</span>
+                  <span>•</span>
+                  <span className="text-emerald-400 flex items-center gap-1">
+                    <Wifi className="w-2.5 h-2.5" />
+                    <span>{players[0].connected !== false ? 'Connected' : 'Reconnecting'}</span>
+                  </span>
+                </div>
+              </div>
+              <div className="text-[11px] font-bold px-3 py-1 bg-emerald-950/50 text-emerald-400 border border-emerald-900 rounded-full uppercase tracking-wider">
+                READY
+              </div>
+            </div>
+          ) : (
+            <div
+              id="player-slot-1-empty"
+              className="flex items-center justify-between border border-dashed border-slate-800/90 p-3.5 rounded-2xl text-slate-500 text-xs font-mono"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl border border-dashed border-slate-800 flex items-center justify-center text-slate-600">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <span>Slot 1: Waiting for host...</span>
+              </div>
+            </div>
+          )}
+
+          {/* Slot 2: Player 2 (or Empty Waiting for Player 2) */}
+          {players[1] ? (
+            <div
+              id="player-slot-2"
+              className="flex items-center gap-3.5 bg-slate-950/70 border border-cyan-800/50 p-3.5 rounded-2xl transition-all"
+            >
+              <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0 border border-slate-700/60">
+                {players[1].isBot ? (
+                  <Bot className="w-5 h-5 text-purple-400" />
+                ) : (
+                  <User className="w-5 h-5 text-cyan-400" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-slate-100 text-sm truncate flex items-center gap-2">
+                  <span>{players[1].displayName}</span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-mono uppercase">
+                    Player 2
+                  </span>
+                </div>
+                <div className="text-[10px] uppercase tracking-wider font-mono text-slate-500 flex items-center gap-2">
+                  <span>{players[1].isBot ? 'AI Bot' : 'Human Player'}</span>
+                  <span>•</span>
+                  <span className="text-emerald-400 flex items-center gap-1">
+                    <Wifi className="w-2.5 h-2.5" />
+                    <span>{players[1].connected !== false ? 'Connected' : 'Reconnecting'}</span>
+                  </span>
+                </div>
+              </div>
+              <div className="text-[11px] font-bold px-3 py-1 bg-emerald-950/50 text-emerald-400 border border-emerald-900 rounded-full uppercase tracking-wider">
+                READY
+              </div>
+            </div>
+          ) : (
+            <div
+              id="player-slot-2-empty"
+              className="flex items-center justify-between border border-dashed border-slate-800/90 p-3.5 rounded-2xl text-slate-500 text-xs font-mono"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl border border-dashed border-slate-800 flex items-center justify-center text-slate-600">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <span>Slot 2: Waiting for Player 2</span>
+              </div>
+
+              <button
+                id="add-bot-slot-2-btn"
+                onClick={() => addBotPlayer('AI Partner')}
+                disabled={isActionPending}
+                className="px-3 py-1.5 rounded-xl bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border border-purple-800/40 text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50"
+              >
+                + Add Bot
+              </button>
+            </div>
+          )}
+
+          {/* Any additional players if present */}
+          {players.slice(2).map((p, idx) => (
             <div
               key={p.id}
               className="flex items-center gap-3.5 bg-slate-950/70 border border-slate-800 p-3.5 rounded-2xl transition-all"
@@ -143,24 +249,14 @@ export const LobbyScreen: React.FC = () => {
                 {p.isBot ? (
                   <Bot className="w-5 h-5 text-purple-400" />
                 ) : (
-                  <User className="w-5 h-5 text-emerald-400" />
+                  <User className="w-5 h-5 text-cyan-400" />
                 )}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-bold text-slate-100 text-sm truncate flex items-center gap-2">
                   <span>{p.displayName}</span>
-                  {idx === 0 && (
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono uppercase">
-                      Host
-                    </span>
-                  )}
-                </div>
-                <div className="text-[10px] uppercase tracking-wider font-mono text-slate-500 flex items-center gap-2">
-                  <span>{p.isBot ? 'AI Bot' : 'Human Player'}</span>
-                  <span>•</span>
-                  <span className="text-emerald-400 flex items-center gap-1">
-                    <Wifi className="w-2.5 h-2.5" />
-                    <span>{p.connected !== false ? 'Connected' : 'Reconnecting'}</span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 font-mono uppercase">
+                    Slot {idx + 3}
                   </span>
                 </div>
               </div>
@@ -169,32 +265,9 @@ export const LobbyScreen: React.FC = () => {
               </div>
             </div>
           ))}
-
-          {/* Empty Seats with Quick Bot Add */}
-          {Array.from({ length: emptySeats }).map((_, i) => (
-            <div
-              key={`empty_${i}`}
-              className="flex items-center justify-between border border-dashed border-slate-800/90 p-3 rounded-2xl text-slate-500 text-xs font-mono"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl border border-dashed border-slate-800 flex items-center justify-center text-slate-600">
-                  <UserPlus className="w-4 h-4" />
-                </div>
-                <span>Seat {occupiedSeats + i + 1}: Waiting for investor...</span>
-              </div>
-
-              <button
-                onClick={() => addBotPlayer(`AI Partner ${occupiedSeats + i + 1}`)}
-                disabled={isActionPending}
-                className="px-2.5 py-1 rounded-lg bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border border-purple-800/40 text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50"
-              >
-                + Add Bot
-              </button>
-            </div>
-          ))}
         </div>
 
-        {/* Quick Action Bar: Fill remaining with bots */}
+        {/* Quick Action Bar: Fill remaining with bots if empty */}
         {emptySeats > 0 && (
           <div className="mb-6 p-3 rounded-2xl bg-slate-950/50 border border-slate-800 flex items-center justify-between text-xs">
             <span className="text-slate-400 font-mono">Want to start without waiting?</span>
@@ -205,7 +278,7 @@ export const LobbyScreen: React.FC = () => {
               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold uppercase tracking-wider text-[11px] flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
             >
               <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-              <span>Fill All With Bots</span>
+              <span>Fill With Bot</span>
             </button>
           </div>
         )}
@@ -231,7 +304,7 @@ export const LobbyScreen: React.FC = () => {
             <Play className="w-4 h-4 fill-current" />
             <span>
               {players.length < 2
-                ? 'Need at least 2 players to start'
+                ? 'Waiting for Player 2'
                 : 'Start Match'}
             </span>
           </button>

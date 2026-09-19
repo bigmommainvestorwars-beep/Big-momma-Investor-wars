@@ -143,4 +143,56 @@ describe('Hard-Coded Multiplayer Connectivity Test (BM-0X9X)', () => {
     assert.ok(matchAfter);
     assert.equal(matchAfter.stateVersion > 1, true);
   });
+
+  it('Real-time synchronization: Host and Guest listeners receive Player 2 without refresh', () => {
+    const engine = AuthoritativeServerEngine.getInstance();
+    const { matchSyncService } = require('../services/firebase/matchSyncService');
+
+    // Host creates room
+    engine.createMatch(
+      TEST_MATCH_ID,
+      'req_sync_host_1',
+      'default-standard-board',
+      '1.0.0',
+      'user_host_1',
+      'Host Investor',
+      true,
+      TEST_ROOM_CODE
+    );
+
+    let hostObservedPlayers: any[] = [];
+    const unsubHost = matchSyncService.subscribeToPlayers(TEST_MATCH_ID, (players: any[]) => {
+      hostObservedPlayers = players;
+    });
+
+    // Initial state: Host sees 1 player
+    assert.equal(hostObservedPlayers.length, 1);
+    assert.equal(hostObservedPlayers[0].displayName, 'Host Investor');
+
+    // Player 2 joins
+    engine.joinMatchByAccessCode(
+      'BM-0X9X',
+      'req_sync_join_2',
+      'user_guest_2',
+      'Guest Investor'
+    );
+
+    // Host listener MUST be triggered and show 2 players without any page refresh
+    assert.equal(hostObservedPlayers.length, 2);
+    assert.equal(hostObservedPlayers[0].displayName, 'Host Investor');
+    assert.equal(hostObservedPlayers[1].displayName, 'Guest Investor');
+
+    // Guest subscribes and also observes both players
+    let guestObservedPlayers: any[] = [];
+    const unsubGuest = matchSyncService.subscribeToPlayers(TEST_MATCH_ID, (players: any[]) => {
+      guestObservedPlayers = players;
+    });
+
+    assert.equal(guestObservedPlayers.length, 2);
+    assert.equal(guestObservedPlayers[0].displayName, 'Host Investor');
+    assert.equal(guestObservedPlayers[1].displayName, 'Guest Investor');
+
+    unsubHost();
+    unsubGuest();
+  });
 });

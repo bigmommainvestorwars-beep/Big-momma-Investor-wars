@@ -223,15 +223,11 @@ export class MatchSyncService {
     }
     this.matchListeners.get(matchId)!.add(onData);
 
-    // Initial local dispatch if available
+    // Initial local dispatch if available for instantaneous local preview
     if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData({ ...local.match });
-        // Local authoritative match: state is purely driven by local engine events
-        return () => {
-          this.matchListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
@@ -244,7 +240,15 @@ export class MatchSyncService {
         matchRef,
         (snap) => {
           if (snap.exists()) {
-            onData({ id: snap.id, ...snap.data() } as FirestoreMatchDoc);
+            const matchDoc = { id: snap.id, ...snap.data() } as FirestoreMatchDoc;
+            onData(matchDoc);
+            // Synchronize in-memory engine state
+            if (this.localContainerProvider) {
+              const local = this.localContainerProvider(matchId);
+              if (local) {
+                Object.assign(local.match, matchDoc);
+              }
+            }
           }
         },
         (err) => {
@@ -273,14 +277,11 @@ export class MatchSyncService {
     }
     this.playersListeners.get(matchId)!.add(onData);
 
-    // Initial local dispatch if available
+    // Initial local dispatch if available for instantaneous local preview
     if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.players]);
-        return () => {
-          this.playersListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
@@ -294,7 +295,24 @@ export class MatchSyncService {
         (snap) => {
           const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
           players.sort((a, b) => a.turnOrder - b.turnOrder);
-          onData(players);
+          if (players.length > 0) {
+            console.log(`[MatchSyncService] onSnapshot synchronized ${players.length} players for match ${matchId}:`, players.map((p) => p.displayName));
+            onData(players);
+
+            // Synchronize in-memory container so that host and guest engines stay identical
+            if (this.localContainerProvider) {
+              const local = this.localContainerProvider(matchId);
+              if (local) {
+                local.players.length = 0;
+                local.players.push(...players);
+                for (const p of players) {
+                  if (!local.match.participantUserIds.includes(p.id)) {
+                    local.match.participantUserIds.push(p.id);
+                  }
+                }
+              }
+            }
+          }
         },
         (err) => {
           if (onError) onError(err);
@@ -327,9 +345,6 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.logs]);
-        return () => {
-          this.logsListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
@@ -397,9 +412,6 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeAuction ? { ...local.activeAuction } : null);
-        return () => {
-          this.auctionListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
@@ -510,9 +522,6 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.pendingChoice ? { ...local.pendingChoice } : null);
-        return () => {
-          this.pendingChoiceListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 
@@ -561,9 +570,6 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeMarketEvent ? { ...local.activeMarketEvent } : null);
-        return () => {
-          this.marketEventListeners.get(matchId)?.delete(onData);
-        };
       }
     }
 

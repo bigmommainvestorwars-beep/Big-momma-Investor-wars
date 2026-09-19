@@ -21,7 +21,8 @@ export function getAdminApp(): App {
 
   // Uses Google Cloud Application Default Credentials (ADC) / IAM automatically
   // via FIREBASE_CONFIG or GOOGLE_APPLICATION_CREDENTIALS
-  adminApp = initializeApp();
+  const projectId = process.env.GCLOUD_PROJECT || (process.env.FIREBASE_CONFIG ? undefined : 'bigmomma-investor-wars');
+  adminApp = projectId ? initializeApp({ projectId }) : initializeApp();
   return adminApp;
 }
 

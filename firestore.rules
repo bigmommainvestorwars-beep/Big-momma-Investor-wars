@@ -95,20 +95,14 @@ service cloud.firestore {
     // Active or finished matches can only be read by participants and admins.
     // WRITE: STRICTLY FORBIDDEN FOR CLIENTS (all mutations are handled authoritatively by Cloud Functions using Admin SDK)
     match /matches/{matchId} {
-      allow get: if resource.data.status == 'waiting_for_players'
-        || (isAuthenticated() && (
-          request.auth.uid in resource.data.participantUserIds
-          || isAdmin()
-        ));
-      allow list: if resource.data.status == 'waiting_for_players'
-        || (isAuthenticated() && request.auth.uid in resource.data.participantUserIds);
+      allow read: if isAuthenticated() || resource.data.status == 'waiting_for_players';
       allow write: if false;
 
       // Players subcollection:
-      // Read: Match participants, players viewing open lobbies, or admin
+      // Read: Authenticated players, match participants, players viewing open lobbies, or admin
       // Write: STRICTLY FORBIDDEN FOR CLIENTS (cash, position, SP, ownership must never be client-writable)
       match /players/{playerId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
+        allow read: if isAuthenticated() || isLobbyOpen(matchId) || isMatchParticipant(matchId);
         allow write: if false;
       }
 
