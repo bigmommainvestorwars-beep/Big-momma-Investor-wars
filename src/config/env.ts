@@ -4,6 +4,8 @@
  * and prevents leaking server-side credentials to the client.
  */
 
+import firebaseAppletConfig from '../../firebase-applet-config.json';
+
 export type AppEnvironment = 'development' | 'staging' | 'production';
 
 export interface FirebaseClientConfig {
@@ -57,13 +59,13 @@ export const ENV: ClientEnvConfig = {
   isDevelopment: currentEnv === 'development',
   useEmulator: getEnvVar('VITE_USE_FIREBASE_EMULATOR') === 'true',
   firebase: {
-    apiKey: getEnvVar('VITE_FIREBASE_API_KEY'),
-    authDomain: getEnvVar('VITE_FIREBASE_AUTH_DOMAIN'),
-    projectId: getEnvVar('VITE_FIREBASE_PROJECT_ID'),
-    storageBucket: getEnvVar('VITE_FIREBASE_STORAGE_BUCKET'),
-    messagingSenderId: getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID'),
-    appId: getEnvVar('VITE_FIREBASE_APP_ID'),
-    firestoreDatabaseId: '(default)',
+    apiKey: getEnvVar('VITE_FIREBASE_API_KEY', firebaseAppletConfig?.apiKey || ''),
+    authDomain: getEnvVar('VITE_FIREBASE_AUTH_DOMAIN', firebaseAppletConfig?.authDomain || ''),
+    projectId: getEnvVar('VITE_FIREBASE_PROJECT_ID', firebaseAppletConfig?.projectId || ''),
+    storageBucket: getEnvVar('VITE_FIREBASE_STORAGE_BUCKET', firebaseAppletConfig?.storageBucket || ''),
+    messagingSenderId: getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID', firebaseAppletConfig?.messagingSenderId || ''),
+    appId: getEnvVar('VITE_FIREBASE_APP_ID', firebaseAppletConfig?.appId || ''),
+    firestoreDatabaseId: getEnvVar('VITE_FIRESTORE_DATABASE_ID', firebaseAppletConfig?.firestoreDatabaseId || '(default)'),
   },
 };
 

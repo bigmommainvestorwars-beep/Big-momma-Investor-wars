@@ -30,7 +30,7 @@ export interface ServerResponseEnvelope<T = unknown> {
   };
 }
 
-let cloudFunctionsLocalTestMode = true;
+let cloudFunctionsLocalTestMode = false;
 
 export function setCloudFunctionsLocalTestMode(enabled: boolean): void {
   cloudFunctionsLocalTestMode = enabled;
