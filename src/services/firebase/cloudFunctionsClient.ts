@@ -75,9 +75,20 @@ export class CloudFunctionsClient {
       const isBackendUnavailable =
         errCode === 'functions/unavailable' ||
         errCode === 'unavailable' ||
+        errCode === 'functions/not-found' ||
+        errCode === 'not-found' ||
+        errCode === 'functions/internal' ||
+        errCode === 'internal' ||
+        errCode === 'functions/unknown' ||
+        errCode === 'unknown' ||
+        errCode === 'functions/deadline-exceeded' ||
+        errCode === 'deadline-exceeded' ||
         errMsg.toLowerCase().includes('failed to fetch') ||
         errMsg.toLowerCase().includes('networkerror') ||
-        errMsg.toLowerCase().includes('network error');
+        errMsg.toLowerCase().includes('network error') ||
+        errMsg.toLowerCase().includes('internal') ||
+        errMsg.toLowerCase().includes('not-found') ||
+        errMsg.toLowerCase().includes('404');
 
       if (isBackendUnavailable && !isAuthRequired) {
         return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
