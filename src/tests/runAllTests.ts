@@ -10,6 +10,7 @@ import './threeDiceSystem.test';
 import './phase5IntegrationAudit.test';
 import './verify_runtime';
 import './verify_runtime_phase4';
+import './cloudflareWebSocket.test';
 import test from 'node:test';
 
 test.after(() => {
