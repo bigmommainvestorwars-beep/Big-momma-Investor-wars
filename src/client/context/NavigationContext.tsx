@@ -66,21 +66,23 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
       if (currentScreen !== 'AUTH' && currentScreen !== 'SPLASH') {
         setHistory(['AUTH']); // Reset history to AUTH if logged out
       } else if (currentScreen === 'SPLASH') {
-        navigate('AUTH');
+        setHistory(['AUTH']);
       }
       return;
     }
 
-    // 3. Authenticated logic
-    if (user && currentScreen === 'SPLASH') {
-      // Check if we have an active match
+    // 3. Authenticated logic: immediately route from AUTH or SPLASH to HOME or active match
+    if (user && (currentScreen === 'SPLASH' || currentScreen === 'AUTH')) {
+      // Check if we have an active match in progress
       if (activeMatchId && match) {
         if (match.status === 'completed') {
           setHistory(['HOME', 'GAME_OVER']);
         } else if (match.status === 'waiting_for_players') {
-          setHistory(['HOME', 'RECOVERY']);
+          setHistory(['HOME', 'LOBBY']);
+        } else if (match.status === 'in_progress' || match.status === 'active') {
+          setHistory(['HOME', 'GAMEPLAY']);
         } else {
-          setHistory(['HOME', 'RECOVERY']);
+          setHistory(['HOME']);
         }
       } else {
         setHistory(['HOME']);

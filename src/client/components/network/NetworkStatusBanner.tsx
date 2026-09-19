@@ -26,7 +26,7 @@ export const NetworkStatusBanner: React.FC = () => {
   };
 
   const isOffline = connectionStatus === 'offline' || !isOnline;
-  const isReconnecting = connectionStatus === 'reconnecting' || isRetrying;
+  const isReconnecting = Boolean(activeMatchId) && (connectionStatus === 'reconnecting' || isRetrying);
 
   return (
     <div id="network-status-container" className="fixed top-0 inset-x-0 z-50 pointer-events-none flex flex-col items-center">

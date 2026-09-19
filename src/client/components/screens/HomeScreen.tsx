@@ -42,15 +42,20 @@ export const HomeScreen: React.FC = () => {
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [showCodeInput, setShowCodeInput] = useState(false);
   const [isJoiningCode, setIsJoiningCode] = useState(false);
+  const [isHosting, setIsHosting] = useState(false);
+  const [isQuickMatching, setIsQuickMatching] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
 
   const handleQuickMatch = async () => {
+    setIsQuickMatching(true);
     try {
       await startQuickMatchQueue();
       // Auto-transitions to GAMEPLAY or LOBBY once state updates
       navigate('LOBBY');
     } catch (err: any) {
       console.warn('Quick Match queue error:', err);
+    } finally {
+      setIsQuickMatching(false);
     }
   };
 
@@ -70,11 +75,14 @@ export const HomeScreen: React.FC = () => {
   };
 
   const handleHostPrivate = async () => {
+    setIsHosting(true);
     try {
       await createPrivateMatch();
       navigate('LOBBY');
     } catch (err: any) {
       console.warn('Host private match error:', err);
+    } finally {
+      setIsHosting(false);
     }
   };
 
@@ -221,12 +229,17 @@ export const HomeScreen: React.FC = () => {
           {/* Host Private Match / Create Investor Lobby */}
           <button
             id="host-private-lobby-btn"
+            disabled={isHosting}
             onClick={handleHostPrivate}
-            className="w-full py-3 px-4 rounded-xl flex items-center justify-between bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white transition-all text-xs font-bold tracking-wider uppercase text-left border border-slate-800 hover:border-slate-700 cursor-pointer"
+            className="w-full py-3 px-4 rounded-xl flex items-center justify-between bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white transition-all text-xs font-bold tracking-wider uppercase text-left border border-slate-800 hover:border-slate-700 cursor-pointer disabled:opacity-50"
           >
             <div className="flex items-center gap-2.5">
-              <PlusCircle className="w-4 h-4 text-emerald-400" />
-              <span>Create Investor Lobby</span>
+              {isHosting ? (
+                <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
+              ) : (
+                <PlusCircle className="w-4 h-4 text-emerald-400" />
+              )}
+              <span>{isHosting ? 'Creating Lobby...' : 'Create Investor Lobby'}</span>
             </div>
             <span className="text-[10px] font-mono text-emerald-400">BM-0X9X</span>
           </button>

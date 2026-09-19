@@ -273,8 +273,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      setConnectionStatus('reconnecting');
       if (activeMatchId) {
+        setConnectionStatus('reconnecting');
         reconnectHandshake();
       } else {
         setConnectionStatus('connected');
