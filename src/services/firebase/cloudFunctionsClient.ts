@@ -4,9 +4,21 @@
  */
 
 import { httpsCallable } from 'firebase/functions';
-import { getFirebaseFunctions, getFirebaseAuth } from './config';
+import {
+  collection,
+  doc,
+  getDoc,
+  setDoc,
+  getDocs,
+  query,
+  where,
+  limit,
+} from 'firebase/firestore';
+import { getFirebaseFunctions, getFirebaseAuth, getFirebaseFirestore } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
 import { authoritativeServerEngine } from '../../engine/authoritativeServerEngine';
+import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../config/testRoomConfig';
+import { FirestoreMatchDoc, FirestorePlayerDoc } from './matchSyncService';
 
 export interface ServerRequestEnvelope<T = unknown> {
   matchId: string;
@@ -47,7 +59,7 @@ export class CloudFunctionsClient {
   ): Promise<ServerResponseEnvelope<TRes>> {
     // In DEVELOPMENT/LOCAL TEST MODE, bypass Cloud Functions network calls and execute via Authoritative Local Engine
     if (cloudFunctionsLocalTestMode) {
-      return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
+      return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
     }
 
     try {
@@ -91,7 +103,7 @@ export class CloudFunctionsClient {
         errMsg.toLowerCase().includes('404');
 
       if (isBackendUnavailable && !isAuthRequired) {
-        return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
+        return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
       }
 
       errorHandler.capture(err, {
@@ -108,15 +120,18 @@ export class CloudFunctionsClient {
     }
   }
 
-  private executeAuthoritativeLocal<TReq, TRes>(
+  private async executeAuthoritativeLocal<TReq, TRes>(
     functionName: string,
     data: ServerRequestEnvelope<TReq>
-  ): ServerResponseEnvelope<TRes> {
+  ): Promise<ServerResponseEnvelope<TRes>> {
     const auth = getFirebaseAuth();
     const p = (data.payload || {}) as Record<string, unknown>;
     const currentUserId =
       (p.actingPlayerId as string) || (p.botId as string) || auth?.currentUser?.uid || 'local_founder_1';
-    const currentDisplayName = (p.displayName as string) || auth?.currentUser?.displayName || 'Investor (You)';
+    const currentDisplayName =
+      (p.displayName as string) ||
+      auth?.currentUser?.displayName ||
+      (auth?.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Investor (You)');
 
     let resultData: unknown = null;
 
@@ -125,9 +140,11 @@ export class CloudFunctionsClient {
         const boardId = (p.boardId as string) || 'default-standard-board';
         const rulesetVersion = (p.rulesetVersion as string) || '1.0.0';
         const isPrivate = (p.isPrivate as boolean) || false;
-        const accessCode = p.accessCode as string | undefined;
+        const accessCode = (p.accessCode as string) || (IS_TEST_ROOM_MODE ? TEST_ROOM_CODE : undefined);
+        const matchId = IS_TEST_ROOM_MODE ? TEST_MATCH_ID : data.matchId;
+
         resultData = authoritativeServerEngine.createMatch(
-          data.matchId,
+          matchId,
           data.requestId,
           boardId,
           rulesetVersion,
@@ -151,6 +168,60 @@ export class CloudFunctionsClient {
         break;
       }
       case 'joinMatchByAccessCode': {
+        const rawCodeInput = (p.accessCode as string) || '';
+        const cleanCode = rawCodeInput.trim().toUpperCase();
+        const rawCode = cleanCode.replace(/^BM-/, '');
+        const bmCode = `BM-${rawCode}`;
+        const isTestCode =
+          cleanCode === TEST_ROOM_CODE ||
+          rawCode === '0X9X' ||
+          cleanCode.includes('0X9X') ||
+          cleanCode === TEST_MATCH_ID.toUpperCase() ||
+          (IS_TEST_ROOM_MODE && (!cleanCode || cleanCode === 'BM-0X9X'));
+
+        let targetMatchId = isTestCode ? TEST_MATCH_ID : undefined;
+
+        // Check in-memory engine first
+        let container = targetMatchId ? authoritativeServerEngine.getMatchContainer(targetMatchId) : undefined;
+
+        // If not in local memory, check Cloud Firestore
+        const db = getFirebaseFirestore();
+        if (db) {
+          if (!targetMatchId) {
+            try {
+              const matchesCol = collection(db, 'matches');
+              const q1 = query(matchesCol, where('accessCode', '==', cleanCode), limit(1));
+              const s1 = await getDocs(q1);
+              if (!s1.empty) {
+                targetMatchId = s1.docs[0].id;
+              } else {
+                const q2 = query(matchesCol, where('accessCode', '==', bmCode), limit(1));
+                const s2 = await getDocs(q2);
+                if (!s2.empty) {
+                  targetMatchId = s2.docs[0].id;
+                }
+              }
+            } catch (err) {
+              console.warn('[CloudFunctionsClient] Firestore match lookup notice:', err);
+            }
+          }
+
+          if (targetMatchId && !container) {
+            try {
+              const mDocRef = doc(db, 'matches', targetMatchId);
+              const mSnap = await getDoc(mDocRef);
+              if (mSnap.exists()) {
+                const matchData = { id: mSnap.id, ...mSnap.data() } as FirestoreMatchDoc;
+                const pSnap = await getDocs(collection(db, 'matches', targetMatchId, 'players'));
+                const playersData = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
+                container = authoritativeServerEngine.hydrateMatchContainer(matchData, playersData);
+              }
+            } catch (err) {
+              console.warn('[CloudFunctionsClient] Firestore hydration notice:', err);
+            }
+          }
+        }
+
         resultData = authoritativeServerEngine.joinMatchByAccessCode(
           p.accessCode as string,
           data.requestId,
@@ -340,7 +411,48 @@ export class CloudFunctionsClient {
       }
     }
 
-    const container = authoritativeServerEngine.getMatchContainer(data.matchId);
+    const resolvedMatchId =
+      data.matchId ||
+      (resultData as any)?.matchId ||
+      (resultData as any)?.id ||
+      (IS_TEST_ROOM_MODE ? TEST_MATCH_ID : undefined);
+
+    const container = resolvedMatchId ? authoritativeServerEngine.getMatchContainer(resolvedMatchId) : undefined;
+
+    // Persist to Cloud Firestore so both Client A and Client B synchronize in real time
+    if (container) {
+      const db = getFirebaseFirestore();
+      if (db) {
+        try {
+          await setDoc(
+            doc(db, 'matches', container.match.id),
+            {
+              ...container.match,
+              id: container.match.id,
+              updatedAt: Date.now(),
+            },
+            { merge: true }
+          );
+
+          const playersCol = collection(db, 'matches', container.match.id, 'players');
+          for (const player of container.players.values()) {
+            await setDoc(
+              doc(playersCol, player.id),
+              {
+                ...player,
+                userId: player.userId || player.id,
+                connected: player.connected !== false,
+                lastActiveAt: Date.now(),
+              },
+              { merge: true }
+            );
+          }
+        } catch (err) {
+          console.warn('[CloudFunctionsClient] Firestore persistence notice:', err);
+        }
+      }
+    }
+
     return {
       success: true,
       requestId: data.requestId,

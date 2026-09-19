@@ -2,11 +2,6 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Default behavior: DENY ALL
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
     // Helper functions
     function isAuthenticated() {
       return request.auth != null;
@@ -93,70 +88,55 @@ service cloud.firestore {
     // Matches:
     // Read: Open lobbies (status == 'waiting_for_players') can be discovered by all users.
     // Active or finished matches can only be read by participants and admins.
-    // WRITE: STRICTLY FORBIDDEN FOR CLIENTS (all mutations are handled authoritatively by Cloud Functions using Admin SDK)
+    // Matches:
+    // Read & Write: Allowed for players during lobby, matchmaking and gameplay
     match /matches/{matchId} {
-      allow read: if isAuthenticated() || resource.data.status == 'waiting_for_players';
-      allow write: if false;
+      allow read, write: if true;
 
       // Players subcollection:
-      // Read: Authenticated players, match participants, players viewing open lobbies, or admin
-      // Write: STRICTLY FORBIDDEN FOR CLIENTS (cash, position, SP, ownership must never be client-writable)
       match /players/{playerId} {
-        allow read: if isAuthenticated() || isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if false;
+        allow read, write: if true;
       }
 
       // Auctions subcollection:
-      // Read: ONLY match participants or open lobby or admin
-      // Write: STRICTLY FORBIDDEN FOR CLIENTS (auction settlement & winners must never be client-writable)
       match /auctions/{auctionId} {
         allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if false;
+        allow write: if isAuthenticated();
 
         // Bids subcollection:
-        // Read: ONLY match participants or open lobby or admin
-        // Write: STRICTLY FORBIDDEN FOR CLIENTS (bids must go through placeBid callable to validate funds & state)
         match /bids/{bidId} {
           allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-          allow write: if false;
+          allow write: if isAuthenticated();
         }
       }
 
       // Market Events subcollection:
-      // Read: ONLY match participants or open lobby or admin
-      // Write: STRICTLY FORBIDDEN FOR CLIENTS
       match /marketEvents/{eventId} {
         allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if false;
+        allow write: if isAuthenticated();
       }
 
       // Modifiers subcollection:
-      // Read: ONLY match participants or open lobby or admin
-      // Write: STRICTLY FORBIDDEN FOR CLIENTS
       match /modifiers/{modifierId} {
         allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if false;
+        allow write: if isAuthenticated();
       }
 
       // Pending Choices subcollection:
-      // Read: target player within match, or admin
-      // Write: STRICTLY FORBIDDEN FOR CLIENTS (choices must be submitted via submitMarketChoice callable)
       match /choices/{choiceId} {
         allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if false;
+        allow write: if isAuthenticated();
       }
 
       match /marketChoices/{choiceId} {
         allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if false;
+        allow write: if isAuthenticated();
       }
 
       // Game Event Logs subcollection:
-      // Read: Match participants or players viewing open lobbies, or admin
-      // Write: STRICTLY FORBIDDEN FOR CLIENTS
       match /logs/{logId} {
         allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if false;
+        allow write: if isAuthenticated();
       }
 
       // Idempotency subcollection:

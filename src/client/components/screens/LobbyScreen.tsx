@@ -16,8 +16,11 @@ import {
   RefreshCw,
   Sparkles,
 } from 'lucide-react';
+import { TEST_ROOM_CODE, IS_TEST_ROOM_MODE } from '../../../config/testRoomConfig';
+import { useAuth } from '../../context/AuthContext';
 
 export const LobbyScreen: React.FC = () => {
+  const { user } = useAuth();
   const {
     match,
     players,
@@ -43,8 +46,7 @@ export const LobbyScreen: React.FC = () => {
   const accessCode =
     match?.accessCode ||
     (match as any)?.accessCode ||
-    match?.id ||
-    'BM-WAR';
+    (IS_TEST_ROOM_MODE ? TEST_ROOM_CODE : match?.id || 'ROOM');
 
   const handleCopyCode = () => {
     if (navigator.clipboard && accessCode) {
@@ -73,8 +75,21 @@ export const LobbyScreen: React.FC = () => {
     }
   };
 
+  // Host player is either the first synced player, or the authenticated user if in the match/creating lobby
+  const hostPlayer =
+    players[0] ||
+    (user
+      ? {
+          id: user.uid,
+          userId: user.uid,
+          displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Investor Host'),
+          isBot: false,
+          connected: true,
+        }
+      : null);
+
   const maxPlayers = 2;
-  const playerCount = players.length;
+  const playerCount = Math.max(players.length, hostPlayer ? 1 : 0);
   const emptySeats = Math.max(0, maxPlayers - playerCount);
 
   return (
@@ -137,13 +152,13 @@ export const LobbyScreen: React.FC = () => {
         {/* Investor Lobby Slots (2 Slots: Player 1 & Player 2) */}
         <div className="space-y-3 mb-6 text-left">
           {/* Slot 1: Player 1 (Host) */}
-          {players[0] ? (
+          {hostPlayer ? (
             <div
               id="player-slot-1"
               className="flex items-center gap-3.5 bg-slate-950/70 border border-slate-800 p-3.5 rounded-2xl transition-all"
             >
               <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0 border border-slate-700/60">
-                {players[0].isBot ? (
+                {hostPlayer.isBot ? (
                   <Bot className="w-5 h-5 text-purple-400" />
                 ) : (
                   <User className="w-5 h-5 text-emerald-400" />
@@ -151,17 +166,17 @@ export const LobbyScreen: React.FC = () => {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-bold text-slate-100 text-sm truncate flex items-center gap-2">
-                  <span>{players[0].displayName}</span>
+                  <span>{hostPlayer.displayName}</span>
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono uppercase">
                     Player 1 (Host)
                   </span>
                 </div>
                 <div className="text-[10px] uppercase tracking-wider font-mono text-slate-500 flex items-center gap-2">
-                  <span>{players[0].isBot ? 'AI Bot' : 'Human Player'}</span>
+                  <span>{hostPlayer.isBot ? 'AI Bot' : 'Human Player'}</span>
                   <span>•</span>
                   <span className="text-emerald-400 flex items-center gap-1">
                     <Wifi className="w-2.5 h-2.5" />
-                    <span>{players[0].connected !== false ? 'Connected' : 'Reconnecting'}</span>
+                    <span>{hostPlayer.connected !== false ? 'Connected' : 'Reconnecting'}</span>
                   </span>
                 </div>
               </div>

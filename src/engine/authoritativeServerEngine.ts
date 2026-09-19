@@ -117,6 +117,28 @@ export class AuthoritativeServerEngine {
     return Array.from(container.players.values()).sort((a, b) => a.turnOrder - b.turnOrder);
   }
 
+  public hydrateMatchContainer(
+    matchDoc: FirestoreMatchDoc,
+    players: FirestorePlayerDoc[]
+  ): AuthoritativeMatchContainer {
+    const playersMap = new Map<string, FirestorePlayerDoc>();
+    for (const p of players) {
+      playersMap.set(p.id, { ...p });
+    }
+    const container: AuthoritativeMatchContainer = {
+      match: { ...matchDoc },
+      players: playersMap,
+      logs: [],
+      activeAuction: null,
+      activeModifiers: [],
+      activeMarketEvent: null,
+      pendingMarketChoice: null,
+    };
+    this.matches.set(matchDoc.id, container);
+    this.emitStateChange(container);
+    return container;
+  }
+
   private emitStateChange(container: AuthoritativeMatchContainer): void {
     const playersList = Array.from(container.players.values()).sort((a, b) => a.turnOrder - b.turnOrder);
     matchSyncService.dispatchLocalUpdate(
