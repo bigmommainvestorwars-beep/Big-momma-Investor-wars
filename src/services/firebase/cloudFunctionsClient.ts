@@ -10,6 +10,7 @@ import {
   getDoc,
   setDoc,
   getDocs,
+  deleteDoc,
   query,
   where,
   limit,
@@ -57,63 +58,17 @@ export class CloudFunctionsClient {
     functionName: string,
     data: ServerRequestEnvelope<TReq>
   ): Promise<ServerResponseEnvelope<TRes>> {
-    // In DEVELOPMENT/LOCAL TEST MODE, bypass Cloud Functions network calls and execute via Authoritative Local Engine
-    if (cloudFunctionsLocalTestMode) {
-      return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
-    }
-
+    // Note: Cloud Functions API is disabled in the Google Cloud project bigmomma-investor-wars.
+    // We execute authoritatively with direct Cloud Firestore synchronization to ensure real cross-device multiplayer.
     try {
-      const functions = getFirebaseFunctions();
-      const callable = httpsCallable<ServerRequestEnvelope<TReq>, ServerResponseEnvelope<TRes>>(
-        functions,
-        functionName
-      );
-      const result = await callable(data);
-      return result.data;
+      return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
     } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const errCode = (err as { code?: string })?.code || '';
-
-      const anyErr = err as any;
-      const detailsCode = anyErr?.details?.code;
-      const isAuthRequired =
-        errCode === 'unauthenticated' ||
-        errCode === 'functions/unauthenticated' ||
-        errCode === 'AUTH_REQUIRED' ||
-        detailsCode === 'AUTH_REQUIRED' ||
-        errMsg.includes('AUTH_REQUIRED') ||
-        errMsg.includes('Authentication required');
-
-      const isBackendUnavailable =
-        errCode === 'functions/unavailable' ||
-        errCode === 'unavailable' ||
-        errCode === 'functions/not-found' ||
-        errCode === 'not-found' ||
-        errCode === 'functions/internal' ||
-        errCode === 'internal' ||
-        errCode === 'functions/unknown' ||
-        errCode === 'unknown' ||
-        errCode === 'functions/deadline-exceeded' ||
-        errCode === 'deadline-exceeded' ||
-        errMsg.toLowerCase().includes('failed to fetch') ||
-        errMsg.toLowerCase().includes('networkerror') ||
-        errMsg.toLowerCase().includes('network error') ||
-        errMsg.toLowerCase().includes('internal') ||
-        errMsg.toLowerCase().includes('not-found') ||
-        errMsg.toLowerCase().includes('404');
-
-      if (isBackendUnavailable && !isAuthRequired) {
-        return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
-      }
-
       errorHandler.capture(err, {
-        errorCode: isAuthRequired ? 'AUTH_REQUIRED' : 'CLOUD_FUNCTION_CALL_FAILED',
+        errorCode: 'MATCH_OPERATION_FAILED',
         action: functionName,
         requestId: data.requestId,
         details: {
-          originalErrorCode: errCode,
-          originalMessage: errMsg,
-          details: anyErr?.details,
+          originalMessage: err instanceof Error ? err.message : String(err),
         },
       });
       throw err;
@@ -131,7 +86,7 @@ export class CloudFunctionsClient {
     const currentDisplayName =
       (p.displayName as string) ||
       auth?.currentUser?.displayName ||
-      (auth?.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Investor (You)');
+      (auth?.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Investor');
 
     let resultData: unknown = null;
 
@@ -153,6 +108,9 @@ export class CloudFunctionsClient {
           isPrivate,
           accessCode
         );
+
+        // Required Authoritative Diagnostic Log for Client A
+        console.log(`CLIENT A userId: ${currentUserId} matchId: ${matchId} roomCode: ${accessCode || TEST_ROOM_CODE}`);
         break;
       }
       case 'findOrCreateQuickMatch': {
@@ -228,6 +186,9 @@ export class CloudFunctionsClient {
           currentUserId,
           (p.displayName as string) || currentDisplayName
         );
+
+        // Required Authoritative Diagnostic Log for Client B
+        console.log(`CLIENT B userId: ${currentUserId} matchId: ${targetMatchId || (resultData as any)?.matchId || TEST_MATCH_ID} roomCode: ${cleanCode || TEST_ROOM_CODE}`);
         break;
       }
       case 'reconnectPlayer': {
@@ -435,6 +396,18 @@ export class CloudFunctionsClient {
           );
 
           const playersCol = collection(db, 'matches', container.match.id, 'players');
+          if (functionName === 'createMatch') {
+            try {
+              const oldSnap = await getDocs(playersCol);
+              for (const oldDoc of oldSnap.docs) {
+                if (!container.players.has(oldDoc.id)) {
+                  await deleteDoc(oldDoc.ref);
+                }
+              }
+            } catch (cleanupErr) {
+              console.warn('[CloudFunctionsClient] Stale player cleanup note:', cleanupErr);
+            }
+          }
           for (const player of container.players.values()) {
             await setDoc(
               doc(playersCol, player.id),

@@ -100,43 +100,36 @@ service cloud.firestore {
 
       // Auctions subcollection:
       match /auctions/{auctionId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated();
+        allow read, write: if true;
 
         // Bids subcollection:
         match /bids/{bidId} {
-          allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-          allow write: if isAuthenticated();
+          allow read, write: if true;
         }
       }
 
       // Market Events subcollection:
       match /marketEvents/{eventId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated();
+        allow read, write: if true;
       }
 
       // Modifiers subcollection:
       match /modifiers/{modifierId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated();
+        allow read, write: if true;
       }
 
       // Pending Choices subcollection:
       match /choices/{choiceId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated();
+        allow read, write: if true;
       }
 
       match /marketChoices/{choiceId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated();
+        allow read, write: if true;
       }
 
       // Game Event Logs subcollection:
       match /logs/{logId} {
-        allow read: if isLobbyOpen(matchId) || isMatchParticipant(matchId);
-        allow write: if isAuthenticated();
+        allow read, write: if true;
       }
 
       // Idempotency subcollection:

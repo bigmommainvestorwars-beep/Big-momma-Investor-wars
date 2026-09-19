@@ -34,9 +34,10 @@ interface AuthContextValue extends AuthState {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // DEVELOPMENT/LOCAL TEST MODE active by default to allow offline gameplay testing without Firebase
-  const [isLocalTestMode, setIsLocalTestModeState] = useState<boolean>(true);
-  const [mockUser, setMockUser] = useState<User | null>(DEFAULT_LOCAL_TEST_USER);
+  // Only use local test mode if Firebase is not configured; production/cloud mode must be default
+  const hasFirebase = authService.isConfigured();
+  const [isLocalTestMode, setIsLocalTestModeState] = useState<boolean>(!hasFirebase);
+  const [mockUser, setMockUser] = useState<User | null>(!hasFirebase ? DEFAULT_LOCAL_TEST_USER : null);
   const [firebaseAuthState, setFirebaseAuthState] = useState<AuthState>({
     isAuthenticated: false,
     user: null,

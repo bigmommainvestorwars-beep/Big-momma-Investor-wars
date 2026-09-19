@@ -22,7 +22,7 @@ export interface FirestoreMatchDoc {
   hostUserId: string;
   boardId: string;
   rulesetVersion: string;
-  status: 'waiting_for_players' | 'in_progress' | 'paused' | 'completed' | 'abandoned';
+  status: 'waiting_for_players' | 'in_progress' | 'active' | 'paused' | 'completed' | 'abandoned';
   currentPhase: string;
   currentPlayerId: string | null;
   turnNumber: number;
@@ -295,20 +295,18 @@ export class MatchSyncService {
         (snap) => {
           const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
           players.sort((a, b) => a.turnOrder - b.turnOrder);
-          if (players.length > 0) {
-            console.log(`[MatchSyncService] onSnapshot synchronized ${players.length} players for match ${matchId}:`, players.map((p) => p.displayName));
-            onData(players);
+          console.log(`[MatchSyncService] onSnapshot synchronized ${players.length} players for match ${matchId}:`, players.map((p) => `${p.displayName} (${p.id})`));
+          onData(players);
 
-            // Synchronize in-memory container so that host and guest engines stay identical
-            if (this.localContainerProvider) {
-              const local = this.localContainerProvider(matchId);
-              if (local) {
-                local.players.length = 0;
-                local.players.push(...players);
-                for (const p of players) {
-                  if (!local.match.participantUserIds.includes(p.id)) {
-                    local.match.participantUserIds.push(p.id);
-                  }
+          // Synchronize in-memory container so that host and guest engines stay identical
+          if (this.localContainerProvider) {
+            const local = this.localContainerProvider(matchId);
+            if (local) {
+              local.players.length = 0;
+              local.players.push(...players);
+              for (const p of players) {
+                if (!local.match.participantUserIds.includes(p.id)) {
+                  local.match.participantUserIds.push(p.id);
                 }
               }
             }

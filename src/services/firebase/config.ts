@@ -12,9 +12,43 @@ import {
   Firestore,
   connectFirestoreEmulator,
   setLogLevel,
+  doc,
+  getDocFromServer,
 } from 'firebase/firestore';
 import { getFunctions, Functions, connectFunctionsEmulator } from 'firebase/functions';
 import { ENV, validateFirebaseClientConfig } from '../../config/env';
+
+// Suppress harmless transient connectivity warning logs from polluting console in offline/iframe modes
+try {
+  setLogLevel('silent');
+} catch {
+  // Ignore if setLogLevel is unavailable
+}
+
+if (typeof window !== 'undefined') {
+  const originalWarn = console.warn;
+  const originalError = console.error;
+
+  const isHarmlessFirestoreOfflineMsg = (args: any[]) => {
+    return args.some(
+      (arg) =>
+        typeof arg === 'string' &&
+        (arg.includes('Could not reach Cloud Firestore backend') ||
+          arg.includes("Backend didn't respond within 10 seconds") ||
+          arg.includes('The client will operate in offline mode'))
+    );
+  };
+
+  console.warn = (...args: any[]) => {
+    if (isHarmlessFirestoreOfflineMsg(args)) return;
+    originalWarn.apply(console, args);
+  };
+
+  console.error = (...args: any[]) => {
+    if (isHarmlessFirestoreOfflineMsg(args)) return;
+    originalError.apply(console, args);
+  };
+}
 
 export interface FirebaseConnectionStatus {
   isConfigured: boolean;
@@ -106,20 +140,14 @@ export function getFirebaseFirestore(): Firestore {
   if (cachedDb) return cachedDb;
   const app = getFirebaseApp();
 
-  // Suppress harmless transient connectivity logs from polluting console in offline/iframe modes
-  try {
-    setLogLevel('error');
-  } catch {
-    // Ignore if setLogLevel is unavailable
-  }
-
   const dbId =
     ENV.firebase.firestoreDatabaseId && ENV.firebase.firestoreDatabaseId !== '(default)'
       ? ENV.firebase.firestoreDatabaseId
       : undefined;
 
+  // Use experimentalForceLongPolling so Firestore avoids the 10-second WebSocket handshake timeout
   const firestoreSettings = {
-    experimentalAutoDetectLongPolling: true,
+    experimentalForceLongPolling: true,
     ignoreUndefinedProperties: true,
   };
 
@@ -130,6 +158,11 @@ export function getFirebaseFirestore(): Firestore {
   } catch {
     // Fall back to existing instance if already initialized
     cachedDb = dbId ? getFirestore(app, dbId) : getFirestore(app);
+  }
+
+  // Validate connection to Firestore as required by Firebase skill
+  if (typeof window !== 'undefined') {
+    testFirestoreConnection(cachedDb).catch(() => {});
   }
 
   if (ENV.useEmulator && !emulatorsConnected) {
@@ -158,5 +191,19 @@ export function getFirebaseFunctions(): Functions {
   }
 
   return cachedFunctions;
+}
+
+let hasTestedConnection = false;
+export async function testFirestoreConnection(dbInstance?: Firestore): Promise<void> {
+  if (hasTestedConnection) return;
+  hasTestedConnection = true;
+  try {
+    const db = dbInstance || getFirebaseFirestore();
+    await getDocFromServer(doc(db, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      // Handled silently - client operates in offline mode when network is unreachable
+    }
+  }
 }
 

@@ -16,7 +16,7 @@ import {
   RefreshCw,
   Sparkles,
 } from 'lucide-react';
-import { TEST_ROOM_CODE, IS_TEST_ROOM_MODE } from '../../../config/testRoomConfig';
+import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../../config/testRoomConfig';
 import { useAuth } from '../../context/AuthContext';
 
 export const LobbyScreen: React.FC = () => {
@@ -38,15 +38,34 @@ export const LobbyScreen: React.FC = () => {
 
   // Auto-navigate to gameplay once match has started
   useEffect(() => {
-    if (match?.status === 'in_progress') {
+    if (
+      match?.status === 'active' ||
+      match?.status === 'in_progress' ||
+      (match?.currentPhase && match.currentPhase !== 'LOBBY')
+    ) {
+      console.log('[LobbyScreen] Transitioning to GAMEPLAY for user:', user?.uid);
       navigate('GAMEPLAY');
     }
-  }, [match?.status, navigate]);
+  }, [match?.status, match?.currentPhase, navigate, user?.uid]);
 
   const accessCode =
     match?.accessCode ||
     (match as any)?.accessCode ||
     (IS_TEST_ROOM_MODE ? TEST_ROOM_CODE : match?.id || 'ROOM');
+
+  const isHost =
+    !match?.hostUserId ||
+    match.hostUserId === user?.uid ||
+    (players.length > 0 && players[0].id === user?.uid);
+
+  const clientRole = isHost ? 'CLIENT A' : 'CLIENT B';
+  const diagnosticString = `${clientRole} userId: ${user?.uid || 'anonymous'} matchId: ${match?.id || TEST_MATCH_ID} roomCode: ${accessCode}`;
+
+  useEffect(() => {
+    if (user?.uid) {
+      console.log(`[Diagnostic] ${diagnosticString}`);
+    }
+  }, [diagnosticString, user?.uid]);
 
   const handleCopyCode = () => {
     if (navigator.clipboard && accessCode) {
@@ -57,6 +76,7 @@ export const LobbyScreen: React.FC = () => {
   };
 
   const handleStartGame = async () => {
+    if (!isHost) return;
     try {
       await startMatch();
       navigate('GAMEPLAY');
@@ -103,14 +123,14 @@ export const LobbyScreen: React.FC = () => {
         <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
 
         {/* Header with Title and Room Code */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 border-b border-slate-800 pb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 border-b border-slate-800 pb-5">
           <div className="text-left">
             <div className="flex items-center gap-2 text-xs font-mono font-bold text-emerald-400 uppercase tracking-widest">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
               <span>Multiplayer Room Active</span>
               <span className="text-slate-600">•</span>
               <span className="text-cyan-300 font-mono font-black">
-                {playerCount}/{maxPlayers} {playerCount >= maxPlayers ? 'Ready to Start' : 'Waiting for Player 2'}
+                {players.length}/{maxPlayers} {players.length >= maxPlayers ? 'Ready to Start' : 'Waiting for Player 2'}
               </span>
             </div>
             <h1 className="text-xl sm:text-2xl font-black uppercase tracking-wider text-white">
@@ -140,6 +160,35 @@ export const LobbyScreen: React.FC = () => {
                 <Copy className="w-4 h-4" />
               )}
             </button>
+          </div>
+        </div>
+
+        {/* Authoritative Diagnostic Card */}
+        <div
+          id="authoritative-diagnostic-banner"
+          className="mb-6 p-3.5 rounded-2xl bg-slate-950/80 border border-emerald-500/30 text-left font-mono text-xs shadow-inner"
+        >
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800/80 text-[11px]">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-bold text-emerald-400 tracking-wider uppercase">
+                {isHost ? 'CLIENT A (Host)' : 'CLIENT B (Guest)'}
+              </span>
+            </div>
+            <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 font-bold border border-emerald-800/60 text-[10px]">
+              {players.length}/2 Synced
+            </span>
+          </div>
+          <div className="space-y-1 text-[11px]">
+            <div className="text-amber-300 font-bold break-all">
+              {diagnosticString}
+            </div>
+            <div className="flex items-center justify-between text-slate-400 text-[10px] pt-0.5">
+              <span>Account: {user?.displayName || user?.email || user?.uid}</span>
+              <span className={players.length >= 2 ? 'text-emerald-400 font-bold' : 'text-amber-400'}>
+                {players.length >= 2 ? 'READY TO START' : 'WAITING FOR PLAYER 2 (PHONE B)'}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -313,14 +362,16 @@ export const LobbyScreen: React.FC = () => {
           <button
             id="start-match-lobby-btn"
             onClick={handleStartGame}
-            disabled={isActionPending || players.length < 2}
+            disabled={isActionPending || players.length < 2 || !isHost}
             className="w-full sm:w-2/3 py-3.5 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border border-emerald-400/20"
           >
             <Play className="w-4 h-4 fill-current" />
             <span>
               {players.length < 2
                 ? 'Waiting for Player 2'
-                : 'Start Match'}
+                : isHost
+                ? 'Start Match'
+                : 'Waiting for Host to start'}
             </span>
           </button>
         </div>

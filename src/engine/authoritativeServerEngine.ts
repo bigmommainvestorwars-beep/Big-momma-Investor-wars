@@ -660,7 +660,7 @@ export class AuthoritativeServerEngine {
     }
 
     const firstPlayer = Array.from(container.players.values()).find((p) => p.turnOrder === 0);
-    container.match.status = 'in_progress';
+    container.match.status = 'active';
     container.match.currentPhase = 'TURN_START';
     container.match.currentPlayerId = firstPlayer?.id || null;
     container.match.turnNumber = 1;
