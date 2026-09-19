@@ -181,27 +181,36 @@ class FirebaseAuthService implements IAuthService {
       const user = mapFirebaseUser(credential.user);
       logger.log('security_event', 'info', `User signed in with Google: ${user.uid}`, { userId: user.uid });
       return user;
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === 'auth/unauthorized-domain') {
+        const host = typeof window !== 'undefined' ? window.location.hostname : 'deployed domain';
+        const msg = `Google Sign-In is blocked because "${host}" is not in Firebase Authorized Domains. Please add "${host}" in Firebase Console > Authentication > Settings > Authorized domains. Or use Quick Investor Sign-In below.`;
+        const domainErr = new Error(msg);
+        (domainErr as any).code = 'auth/unauthorized-domain';
+        errorHandler.capture(domainErr, { errorCode: 'AUTH_UNAUTHORIZED_DOMAIN', action: 'signInWithGoogle' });
+        throw domainErr;
+      }
+      if (error?.code === 'auth/popup-blocked') {
+        const msg = 'Safari blocked the Google popup window. Tap to allow popups in Safari settings, or use Quick Investor Sign-In below.';
+        const popupErr = new Error(msg);
+        (popupErr as any).code = 'auth/popup-blocked';
+        errorHandler.capture(popupErr, { errorCode: 'AUTH_POPUP_BLOCKED', action: 'signInWithGoogle' });
+        throw popupErr;
+      }
       errorHandler.capture(error, { errorCode: 'AUTH_SIGN_IN_FAILED', action: 'signInWithGoogle' });
       throw error;
     }
   }
 
   /**
-   * Anonymous Authentication is disabled for production.
-   * Isolated only to local development emulator environments.
+   * Anonymous Authentication for quick investor access
    */
   public async signInAnonymously(): Promise<User> {
-    if (ENV.isProduction || !ENV.useEmulator) {
-      throw new Error(
-        'Anonymous Authentication is disabled for this project. Please sign in with Google or Email/Password.'
-      );
-    }
     const auth = getFirebaseAuth();
     try {
       const credential = await fbSignInAnonymously(auth);
       const user = mapFirebaseUser(credential.user);
-      logger.log('security_event', 'info', `User signed in anonymously (emulator): ${user.uid}`, { userId: user.uid });
+      logger.log('security_event', 'info', `User signed in anonymously: ${user.uid}`, { userId: user.uid });
       return user;
     } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_ANON_SIGN_IN_FAILED', action: 'signInAnonymously' });

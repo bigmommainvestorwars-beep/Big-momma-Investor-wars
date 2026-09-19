@@ -18,6 +18,7 @@ import {
 import { getFirebaseFunctions, getFirebaseAuth, getFirebaseFirestore } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
 import { authoritativeServerEngine } from '../../engine/authoritativeServerEngine';
+import { ServerFunctionError } from '../../../functions/src/types/contracts';
 import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../config/testRoomConfig';
 import { FirestoreMatchDoc, FirestorePlayerDoc } from './matchSyncService';
 
@@ -44,6 +45,15 @@ export interface ServerResponseEnvelope<T = unknown> {
 }
 
 let cloudFunctionsLocalTestMode = false;
+let activeClientUser: { uid: string; displayName: string } | null = null;
+
+export function setActiveClientUser(user: { uid: string; displayName: string } | null): void {
+  activeClientUser = user;
+}
+
+export function getActiveClientUser(): { uid: string; displayName: string } | null {
+  return activeClientUser;
+}
 
 export function setCloudFunctionsLocalTestMode(enabled: boolean): void {
   cloudFunctionsLocalTestMode = enabled;
@@ -63,14 +73,25 @@ export class CloudFunctionsClient {
     try {
       return await this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
     } catch (err: unknown) {
-      errorHandler.capture(err, {
-        errorCode: 'MATCH_OPERATION_FAILED',
-        action: functionName,
-        requestId: data.requestId,
-        details: {
-          originalMessage: err instanceof Error ? err.message : String(err),
-        },
-      });
+      // Reconnection attempts on stale or expired sessions are benign recovery probes and should not be logged as system faults
+      const isBenignReconnectionProbe =
+        functionName === 'reconnectPlayer' &&
+        (err instanceof ServerFunctionError ||
+          (err as any)?.code === 'MATCH_NOT_FOUND' ||
+          (err as any)?.code === 'TARGET_NOT_FOUND' ||
+          (err as any)?.message?.includes('not found') ||
+          (err as any)?.message?.includes('expired'));
+
+      if (!isBenignReconnectionProbe) {
+        errorHandler.capture(err, {
+          errorCode: 'MATCH_OPERATION_FAILED',
+          action: functionName,
+          requestId: data.requestId,
+          details: {
+            originalMessage: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
       throw err;
     }
   }
@@ -81,12 +102,46 @@ export class CloudFunctionsClient {
   ): Promise<ServerResponseEnvelope<TRes>> {
     const auth = getFirebaseAuth();
     const p = (data.payload || {}) as Record<string, unknown>;
+    const storedUid = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null;
+    const storedName = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_name') : null;
+
     const currentUserId =
-      (p.actingPlayerId as string) || (p.botId as string) || auth?.currentUser?.uid || 'local_founder_1';
+      (p.actingPlayerId as string) ||
+      (p.botId as string) ||
+      auth?.currentUser?.uid ||
+      activeClientUser?.uid ||
+      storedUid ||
+      'local_founder_1';
     const currentDisplayName =
       (p.displayName as string) ||
       auth?.currentUser?.displayName ||
+      activeClientUser?.displayName ||
+      storedName ||
       (auth?.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Investor');
+
+    // Pre-hydrate match from Firestore if not present in local memory
+    const targetMatchIdToHydrate =
+      IS_TEST_ROOM_MODE && (!data.matchId || data.matchId === TEST_MATCH_ID || data.matchId === 'match_test_bm_0x9x')
+        ? TEST_MATCH_ID
+        : data.matchId;
+
+    if (targetMatchIdToHydrate && !authoritativeServerEngine.getMatchContainer(targetMatchIdToHydrate)) {
+      const db = getFirebaseFirestore();
+      if (db) {
+        try {
+          const mDocRef = doc(db, 'matches', targetMatchIdToHydrate);
+          const mSnap = await getDoc(mDocRef);
+          if (mSnap.exists()) {
+            const matchData = { id: mSnap.id, ...mSnap.data() } as FirestoreMatchDoc;
+            const pSnap = await getDocs(collection(db, 'matches', targetMatchIdToHydrate, 'players'));
+            const playersData = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
+            authoritativeServerEngine.hydrateMatchContainer(matchData, playersData);
+          }
+        } catch (err) {
+          console.warn(`[CloudFunctionsClient] Firestore pre-hydration notice for ${targetMatchIdToHydrate}:`, err);
+        }
+      }
+    }
 
     let resultData: unknown = null;
 
@@ -192,10 +247,16 @@ export class CloudFunctionsClient {
         break;
       }
       case 'reconnectPlayer': {
+        const targetMatchId =
+          IS_TEST_ROOM_MODE && (!data.matchId || data.matchId === TEST_MATCH_ID || data.matchId === 'match_test_bm_0x9x')
+            ? TEST_MATCH_ID
+            : data.matchId;
+
         resultData = authoritativeServerEngine.reconnectPlayer(
-          data.matchId,
+          targetMatchId,
           data.requestId,
-          currentUserId
+          currentUserId,
+          currentDisplayName
         );
         break;
       }
@@ -489,7 +550,7 @@ export class CloudFunctionsClient {
   public reconnectPlayer(matchId: string, requestId: string) {
     return this.call<
       Record<string, never>,
-      { success: boolean; stateVersion: number; player: any }
+      { success: boolean; stateVersion: number; player: any; sessionExpired?: boolean }
     >('reconnectPlayer', {
       matchId,
       requestId,

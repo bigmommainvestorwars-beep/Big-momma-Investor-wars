@@ -153,7 +153,7 @@ export class AuthoritativeServerEngine {
   }
 
   private assertMatchActive(match: FirestoreMatchDoc): void {
-    if (match.status !== 'in_progress') {
+    if (match.status !== 'active' && match.status !== 'in_progress') {
       throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_ACTIVE, 'Match is not in progress.');
     }
   }
@@ -480,16 +480,52 @@ export class AuthoritativeServerEngine {
   public reconnectPlayer(
     matchId: string,
     requestId: string,
-    userId: string
-  ): { success: boolean; stateVersion: number; player: FirestorePlayerDoc } {
-    const container = this.matches.get(matchId);
+    userId: string,
+    displayName?: string
+  ): { success: boolean; stateVersion: number; player: FirestorePlayerDoc | null; sessionExpired?: boolean } {
+    let container = this.matches.get(matchId);
+
+    // If test room mode and target is test match or test code, ensure container is available
+    if (!container && (matchId === TEST_MATCH_ID || (IS_TEST_ROOM_MODE && (!matchId || matchId.includes('test') || matchId === 'match_test_bm_0x9x')))) {
+      container = this.matches.get(TEST_MATCH_ID);
+      if (!container) {
+        this.createMatch(
+          TEST_MATCH_ID,
+          requestId,
+          'default-standard-board',
+          'v1.0.0',
+          userId,
+          displayName || 'Investor',
+          true,
+          TEST_ROOM_CODE
+        );
+        container = this.matches.get(TEST_MATCH_ID);
+      }
+    }
+
     if (!container) {
-      throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match session not found for reconnection.');
+      return {
+        success: false,
+        stateVersion: 0,
+        player: null,
+        sessionExpired: true,
+      };
     }
-    const player = container.players.get(userId);
+
+    let player = container.players.get(userId);
     if (!player) {
-      throw new ServerFunctionError(SERVER_ERROR_CODES.TARGET_NOT_FOUND, 'Player not found in active match session.');
+      if (container.match.status === 'waiting_for_players' && container.players.size < 4) {
+        player = this.joinMatch(container.match.id, requestId, userId, displayName || 'Investor');
+      } else {
+        return {
+          success: false,
+          stateVersion: container.match.stateVersion,
+          player: null,
+          sessionExpired: true,
+        };
+      }
     }
+
     player.connected = true;
     if (player.status === 'disconnected') {
       player.status = 'active';
@@ -502,6 +538,7 @@ export class AuthoritativeServerEngine {
       success: true,
       stateVersion: container.match.stateVersion,
       player: { ...player },
+      sessionExpired: false,
     };
   }
 

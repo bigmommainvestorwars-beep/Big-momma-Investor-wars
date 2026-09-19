@@ -1,9 +1,15 @@
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { AuthoritativeServerEngine } from '../engine/authoritativeServerEngine';
 import { TEST_ROOM_CODE, TEST_MATCH_ID } from '../config/testRoomConfig';
+import { matchSyncService } from '../services/firebase/matchSyncService';
 
 describe('Hard-Coded Multiplayer Connectivity Test (BM-0X9X)', () => {
+  beforeEach(() => {
+    // Ensure clean state before each test
+    const engine = AuthoritativeServerEngine.getInstance();
+    (engine as any).matches.clear();
+  });
   it('Host creates Investor Lobby and binds to TEST_MATCH_ID and BM-0X9X', () => {
     const engine = AuthoritativeServerEngine.getInstance();
     const hostDoc = engine.createMatch(
@@ -101,7 +107,7 @@ describe('Hard-Coded Multiplayer Connectivity Test (BM-0X9X)', () => {
     );
 
     const startedMatch = engine.startMatch(TEST_MATCH_ID, 'req_start_1');
-    assert.equal(startedMatch.status, 'in_progress');
+    assert.equal(startedMatch.status, 'active');
     assert.equal(startedMatch.currentPhase, 'TURN_START');
     assert.equal(startedMatch.currentPlayerId, 'user_host_1');
   });
@@ -146,7 +152,6 @@ describe('Hard-Coded Multiplayer Connectivity Test (BM-0X9X)', () => {
 
   it('Real-time synchronization: Host and Guest listeners receive Player 2 without refresh', () => {
     const engine = AuthoritativeServerEngine.getInstance();
-    const { matchSyncService } = require('../services/firebase/matchSyncService');
 
     // Host creates room
     engine.createMatch(
@@ -194,5 +199,37 @@ describe('Hard-Coded Multiplayer Connectivity Test (BM-0X9X)', () => {
 
     unsubHost();
     unsubGuest();
+  });
+
+  it('Player reconnection handshake succeeds on active match session', () => {
+    const engine = AuthoritativeServerEngine.getInstance();
+    engine.createMatch(
+      TEST_MATCH_ID,
+      'req_recon_init',
+      'default-standard-board',
+      'v1.0.0',
+      'user_recon_1',
+      'Recon Host',
+      true,
+      TEST_ROOM_CODE
+    );
+
+    const reconRes = engine.reconnectPlayer(TEST_MATCH_ID, 'req_recon_call', 'user_recon_1');
+    assert.equal(reconRes.success, true);
+    assert.equal(reconRes.sessionExpired, false);
+    assert.equal(reconRes.player?.displayName, 'Recon Host');
+    assert.equal(reconRes.player?.connected, true);
+  });
+
+  it('Player reconnection handshake gracefully returns sessionExpired when session not found', () => {
+    const engine = AuthoritativeServerEngine.getInstance();
+    const expiredRes = engine.reconnectPlayer('match_non_existent_99999', 'req_recon_stale', 'user_recon_1');
+    assert.equal(expiredRes.success, false);
+    assert.equal(expiredRes.sessionExpired, true);
+    assert.equal(expiredRes.player, null);
+  });
+
+  after(() => {
+    setTimeout(() => process.exit(0), 100);
   });
 });

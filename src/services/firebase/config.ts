@@ -200,10 +200,8 @@ export async function testFirestoreConnection(dbInstance?: Firestore): Promise<v
   try {
     const db = dbInstance || getFirebaseFirestore();
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      // Handled silently - client operates in offline mode when network is unreachable
-    }
+  } catch {
+    // Handled silently - client operates seamlessly with offline/fallback persistence
   }
 }
 

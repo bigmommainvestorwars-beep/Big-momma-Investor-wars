@@ -229,14 +229,36 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       if (activeMatchId) {
         const reqId = `reconnect_${Date.now()}`;
-        await cloudFunctionsClient.reconnectPlayer(activeMatchId, reqId);
+        const res = await cloudFunctionsClient.reconnectPlayer(activeMatchId, reqId);
+        if (res.data?.sessionExpired || !res.data?.success) {
+          console.warn('[GameContext] Match session expired or not found. Clearing stale activeMatchId.');
+          setActiveMatchId(null);
+          try {
+            localStorage.removeItem('bigmomma_active_match_id');
+          } catch {}
+          setConnectionStatus('connected');
+          return;
+        }
       }
       setConnectionStatus('connected');
       setIsOnline(true);
       setLastReconnectedAt(Date.now());
       setMatchError(null);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Reconnection handshake notice:', err);
+      const errMsg = err?.message || String(err);
+      if (
+        errMsg.includes('Match session not found') ||
+        errMsg.includes('MATCH_NOT_FOUND') ||
+        errMsg.includes('Player not found') ||
+        err?.code === 'MATCH_NOT_FOUND' ||
+        err?.code === 'TARGET_NOT_FOUND'
+      ) {
+        setActiveMatchId(null);
+        try {
+          localStorage.removeItem('bigmomma_active_match_id');
+        } catch {}
+      }
       if (typeof navigator !== 'undefined' && navigator.onLine) {
         setConnectionStatus('connected');
       } else {

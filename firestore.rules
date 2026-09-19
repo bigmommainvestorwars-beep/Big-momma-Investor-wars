@@ -139,6 +139,11 @@ service cloud.firestore {
       }
     }
 
+    // Test & Diagnostic Connection Check
+    match /test/{testId} {
+      allow read: if true;
+    }
+
     // Security Audit Events: Read-only for admins, client write forbidden
     match /securityEvents/{eventId} {
       allow read: if isAdmin();
