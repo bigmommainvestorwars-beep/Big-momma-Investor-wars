@@ -523,12 +523,23 @@ export class AuthoritativeServerEngine {
     displayName: string
   ): { matchId: string; player: FirestorePlayerDoc } {
     const cleanCode = accessCode.trim().toUpperCase();
+    const rawCode = cleanCode.replace(/^BM-/, '');
+    const bmCode = `BM-${rawCode}`;
+
     for (const [id, container] of this.matches.entries()) {
+      if (container.match.status !== 'waiting_for_players') continue;
       const matchCode = (container.match.accessCode || '').toUpperCase();
+      const matchRawCode = matchCode.replace(/^BM-/, '');
       const matchIdClean = id.toUpperCase();
+
       if (
-        (matchCode === cleanCode || matchIdClean === cleanCode) &&
-        container.match.status === 'waiting_for_players'
+        matchCode === cleanCode ||
+        matchCode === bmCode ||
+        matchRawCode === rawCode ||
+        matchIdClean === cleanCode ||
+        matchIdClean === bmCode ||
+        matchIdClean.endsWith(rawCode) ||
+        matchIdClean.endsWith(cleanCode)
       ) {
         const player = this.joinMatch(id, requestId, userId, displayName);
         return { matchId: id, player };

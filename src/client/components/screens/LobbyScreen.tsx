@@ -41,8 +41,10 @@ export const LobbyScreen: React.FC = () => {
   }, [match?.status, navigate]);
 
   const accessCode =
+    match?.accessCode ||
     (match as any)?.accessCode ||
-    (match?.id ? `BM-${match.id.slice(-4).toUpperCase()}` : 'BM-WAR');
+    match?.id ||
+    'BM-WAR';
 
   const handleCopyCode = () => {
     if (navigator.clipboard && accessCode) {

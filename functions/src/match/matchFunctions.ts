@@ -252,18 +252,69 @@ export const joinMatchByAccessCode = onCall(
     }
 
     const cleanCode = payload.accessCode.trim().toUpperCase();
+    const rawCode = cleanCode.replace(/^BM-/, '');
+    const bmCode = `BM-${rawCode}`;
     const matchesRef = db.collection('matches');
 
-    const querySnap = await matchesRef.where('accessCode', '==', cleanCode).limit(1).get();
+    let matchId: string | undefined;
 
-    let matchId = querySnap.docs[0]?.id;
-    if (!matchId) {
-      const directDoc = await matchesRef.doc(payload.accessCode).get();
-      if (directDoc.exists) {
-        matchId = directDoc.id;
-      } else {
-        throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, `No match found with code "${cleanCode}".`);
+    // 1. Query by accessCode field (cleanCode, bmCode, rawCode)
+    const accessCodeQueries = [
+      matchesRef.where('accessCode', '==', cleanCode).limit(1).get(),
+      matchesRef.where('accessCode', '==', bmCode).limit(1).get(),
+      matchesRef.where('accessCode', '==', rawCode).limit(1).get(),
+    ];
+
+    const results = await Promise.all(accessCodeQueries);
+    for (const snap of results) {
+      if (!snap.empty && snap.docs[0]) {
+        matchId = snap.docs[0].id;
+        break;
       }
+    }
+
+    // 2. Query by direct document ID
+    if (!matchId) {
+      const candidates = [cleanCode, bmCode, rawCode, payload.accessCode];
+      for (const candidate of candidates) {
+        if (!candidate) continue;
+        const directDoc = await matchesRef.doc(candidate).get();
+        if (directDoc.exists) {
+          matchId = directDoc.id;
+          break;
+        }
+      }
+    }
+
+    // 3. Fallback scan of open waiting lobbies (supports matchId suffix matching)
+    if (!matchId) {
+      const openLobbiesSnap = await matchesRef
+        .where('status', '==', 'waiting_for_players')
+        .limit(20)
+        .get();
+
+      for (const docSnap of openLobbiesSnap.docs) {
+        const data = docSnap.data() as MatchState;
+        const docAccessCode = (data.accessCode || '').toUpperCase();
+        const docRawCode = docAccessCode.replace(/^BM-/, '');
+        const idUpper = docSnap.id.toUpperCase();
+
+        if (
+          docAccessCode === cleanCode ||
+          docAccessCode === bmCode ||
+          docRawCode === rawCode ||
+          idUpper === cleanCode ||
+          idUpper.endsWith(rawCode) ||
+          idUpper.endsWith(cleanCode)
+        ) {
+          matchId = docSnap.id;
+          break;
+        }
+      }
+    }
+
+    if (!matchId) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, `No open lobby found for match code "${cleanCode}".`);
     }
 
     const matchRef = matchesRef.doc(matchId);
