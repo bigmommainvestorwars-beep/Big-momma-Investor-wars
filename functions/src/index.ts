@@ -6,6 +6,8 @@
 // Match functions
 export {
   createMatch,
+  findOrCreateQuickMatch,
+  joinMatchByAccessCode,
   joinMatch,
   leaveMatch,
   startMatch,

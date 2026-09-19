@@ -61,18 +61,6 @@ export class CloudFunctionsClient {
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const errCode = (err as { code?: string })?.code || '';
-      const isNotFoundOrUnavailable =
-        errCode === 'functions/not-found' ||
-        errCode === 'not-found' ||
-        errCode === 'functions/unavailable' ||
-        errMsg.includes('not-found') ||
-        errMsg.includes('404') ||
-        errMsg.includes('failed to fetch');
-
-      if (isNotFoundOrUnavailable) {
-        // Authoritative server execution fallback
-        return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
-      }
 
       const anyErr = err as any;
       const detailsCode = anyErr?.details?.code;
@@ -83,6 +71,21 @@ export class CloudFunctionsClient {
         detailsCode === 'AUTH_REQUIRED' ||
         errMsg.includes('AUTH_REQUIRED') ||
         errMsg.includes('Authentication required');
+
+      const isBackendUnavailable =
+        errCode === 'functions/not-found' ||
+        errCode === 'not-found' ||
+        errCode === 'functions/unavailable' ||
+        errCode === 'functions/internal' ||
+        errCode === 'internal' ||
+        errMsg.includes('internal') ||
+        errMsg.includes('not-found') ||
+        errMsg.includes('404') ||
+        errMsg.includes('failed to fetch');
+
+      if (isBackendUnavailable && !isAuthRequired) {
+        return this.executeAuthoritativeLocal<TReq, TRes>(functionName, data);
+      }
 
       errorHandler.capture(err, {
         errorCode: isAuthRequired ? 'AUTH_REQUIRED' : 'CLOUD_FUNCTION_CALL_FAILED',

@@ -37,6 +37,8 @@ export interface MatchState {
   participantUserIds: string[];
   hostUserId: string;
   winnerId: string | null;
+  isPrivate?: boolean;
+  accessCode?: string;
   createdAt: number;
   updatedAt: number;
 }

@@ -24,7 +24,7 @@ const db = getAdminFirestore();
  * 1. createMatch
  */
 export const createMatch = onCall(
-  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ boardId: string; rulesetVersion?: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ boardId: string; rulesetVersion?: string; isPrivate?: boolean; accessCode?: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
     RateLimiter.check(auth.userId, 'createMatch');
@@ -40,10 +40,12 @@ export const createMatch = onCall(
       throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Match already exists.');
     }
 
+    const generatedAccessCode = payload?.accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
     const initialMatch: MatchState = {
       matchId,
-      boardId: payload.boardId || 'default-standard-board',
-      rulesetVersion: payload.rulesetVersion || '1.0.0',
+      boardId: payload?.boardId || 'default-standard-board',
+      rulesetVersion: payload?.rulesetVersion || '1.0.0',
       status: 'waiting_for_players',
       currentPhase: 'LOBBY',
       currentPlayerId: null,
@@ -53,6 +55,8 @@ export const createMatch = onCall(
       participantUserIds: [auth.userId],
       hostUserId: auth.userId,
       winnerId: null,
+      isPrivate: payload?.isPrivate || false,
+      accessCode: generatedAccessCode,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -87,6 +91,242 @@ export const createMatch = onCall(
       data: initialMatch,
     };
     return response;
+  })
+);
+
+/**
+ * 1b. findOrCreateQuickMatch
+ */
+export const findOrCreateQuickMatch = onCall(
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ displayName?: string; isPrivate?: boolean; accessCode?: string }>>) => {
+    const auth = AuthGuard.assertAuthenticated(request);
+    AppCheckGuard.verify(request);
+    RateLimiter.check(auth.userId, 'findOrCreateQuickMatch');
+
+    const { requestId, payload } = request.data;
+    const matchesRef = db.collection('matches');
+
+    const openQuery = await matchesRef
+      .where('status', '==', 'waiting_for_players')
+      .where('isPrivate', '==', false)
+      .limit(10)
+      .get();
+
+    const targetMatchDoc = openQuery.docs.find((doc) => {
+      const data = doc.data() as MatchState;
+      return (data.participantUserIds?.length || 0) < 4;
+    });
+
+    if (targetMatchDoc) {
+      const matchId = targetMatchDoc.id;
+      const matchRef = matchesRef.doc(matchId);
+
+      const result = await IdempotencyService.executeWithIdempotency(
+        matchId,
+        requestId,
+        auth.userId,
+        'findOrCreateQuickMatch_join',
+        async (t) => {
+          const snap = await t.get(matchRef);
+          if (!snap.exists) {
+            throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
+          }
+          const match = snap.data() as MatchState;
+          if (match.status !== 'waiting_for_players') {
+            throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_ACTIVE, 'Match already started.');
+          }
+
+          if (match.participantUserIds.includes(auth.userId)) {
+            const playerSnap = await t.get(matchRef.collection('players').doc(auth.userId));
+            return { matchId, isNew: false, accessCode: match.accessCode || '', player: playerSnap.data(), stateVersion: match.stateVersion };
+          }
+
+          const playersSnap = await t.get(matchRef.collection('players'));
+          if (playersSnap.size >= 4) {
+            throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Lobby is full.');
+          }
+
+          const newPlayer: PlayerState = {
+            id: auth.userId,
+            userId: auth.userId,
+            displayName: payload?.displayName || auth.email?.split('@')[0] || `Investor ${playersSnap.size + 1}`,
+            currentSpaceIndex: 0,
+            status: 'active',
+            turnOrder: playersSnap.size,
+            netWorth: 1500,
+            cash: 1500,
+            specialPoints: 50,
+            ownedSpaceIds: [],
+            companyShareIds: [],
+            modifierIds: [],
+            connected: true,
+            lastActiveAt: Date.now(),
+          };
+
+          match.participantUserIds.push(auth.userId);
+          const newVersion = GameEngineInternal.incrementStateVersion(t, matchRef, match);
+
+          t.update(matchRef, { participantUserIds: match.participantUserIds });
+          t.set(matchRef.collection('players').doc(newPlayer.id), newPlayer);
+
+          return { matchId, isNew: false, accessCode: match.accessCode || '', player: newPlayer, stateVersion: newVersion };
+        }
+      );
+
+      return {
+        success: true,
+        requestId,
+        serverTime: Date.now(),
+        stateVersion: result.stateVersion || 1,
+        data: result,
+      };
+    } else {
+      const matchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const matchRef = matchesRef.doc(matchId);
+      const accessCode = `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+      const initialMatch: MatchState = {
+        matchId,
+        boardId: 'default-standard-board',
+        rulesetVersion: '1.0.0',
+        status: 'waiting_for_players',
+        currentPhase: 'LOBBY',
+        currentPlayerId: null,
+        turnNumber: 0,
+        roundNumber: 0,
+        stateVersion: 1,
+        participantUserIds: [auth.userId],
+        hostUserId: auth.userId,
+        winnerId: null,
+        isPrivate: false,
+        accessCode,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const hostPlayer: PlayerState = {
+        id: auth.userId,
+        userId: auth.userId,
+        displayName: payload?.displayName || auth.email?.split('@')[0] || 'Host',
+        currentSpaceIndex: 0,
+        status: 'active',
+        turnOrder: 0,
+        netWorth: 1500,
+        cash: 1500,
+        specialPoints: 50,
+        ownedSpaceIds: [],
+        companyShareIds: [],
+        modifierIds: [],
+        connected: true,
+        lastActiveAt: Date.now(),
+      };
+
+      await db.runTransaction(async (t) => {
+        t.set(matchRef, initialMatch);
+        t.set(matchRef.collection('players').doc(hostPlayer.id), hostPlayer);
+      });
+
+      return {
+        success: true,
+        requestId,
+        serverTime: Date.now(),
+        stateVersion: 1,
+        data: { matchId, isNew: true, accessCode, player: hostPlayer },
+      };
+    }
+  })
+);
+
+/**
+ * 1c. joinMatchByAccessCode
+ */
+export const joinMatchByAccessCode = onCall(
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ accessCode: string; displayName?: string }>>) => {
+    const auth = AuthGuard.assertAuthenticated(request);
+    AppCheckGuard.verify(request);
+    RateLimiter.check(auth.userId, 'joinMatchByAccessCode');
+
+    const { requestId, payload } = request.data;
+    if (!payload?.accessCode) {
+      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_TIMING, 'accessCode is required.');
+    }
+
+    const cleanCode = payload.accessCode.trim().toUpperCase();
+    const matchesRef = db.collection('matches');
+
+    const querySnap = await matchesRef.where('accessCode', '==', cleanCode).limit(1).get();
+
+    let matchId = querySnap.docs[0]?.id;
+    if (!matchId) {
+      const directDoc = await matchesRef.doc(payload.accessCode).get();
+      if (directDoc.exists) {
+        matchId = directDoc.id;
+      } else {
+        throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, `No match found with code "${cleanCode}".`);
+      }
+    }
+
+    const matchRef = matchesRef.doc(matchId);
+
+    const result = await IdempotencyService.executeWithIdempotency(
+      matchId,
+      requestId,
+      auth.userId,
+      'joinMatchByAccessCode',
+      async (t) => {
+        const snap = await t.get(matchRef);
+        if (!snap.exists) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
+        }
+        const match = snap.data() as MatchState;
+        if (match.status !== 'waiting_for_players') {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_ACTIVE, 'Match has already started.');
+        }
+
+        if (match.participantUserIds.includes(auth.userId)) {
+          const playerSnap = await t.get(matchRef.collection('players').doc(auth.userId));
+          return { matchId, player: playerSnap.data(), stateVersion: match.stateVersion };
+        }
+
+        const playersSnap = await t.get(matchRef.collection('players'));
+        if (playersSnap.size >= 4) {
+          throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Lobby is full (max 4 players).');
+        }
+
+        const newPlayer: PlayerState = {
+          id: auth.userId,
+          userId: auth.userId,
+          displayName: payload?.displayName || auth.email?.split('@')[0] || `Player ${playersSnap.size + 1}`,
+          currentSpaceIndex: 0,
+          status: 'active',
+          turnOrder: playersSnap.size,
+          netWorth: 1500,
+          cash: 1500,
+          specialPoints: 50,
+          ownedSpaceIds: [],
+          companyShareIds: [],
+          modifierIds: [],
+          connected: true,
+          lastActiveAt: Date.now(),
+        };
+
+        match.participantUserIds.push(auth.userId);
+        const newVersion = GameEngineInternal.incrementStateVersion(t, matchRef, match);
+
+        t.update(matchRef, { participantUserIds: match.participantUserIds });
+        t.set(matchRef.collection('players').doc(newPlayer.id), newPlayer);
+
+        return { matchId, player: newPlayer, stateVersion: newVersion };
+      }
+    );
+
+    return {
+      success: true,
+      requestId,
+      serverTime: Date.now(),
+      stateVersion: result.stateVersion || 1,
+      data: result,
+    };
   })
 );
 
