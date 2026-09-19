@@ -147,7 +147,25 @@ class FirebaseAuthService implements IAuthService {
       const user = mapFirebaseUser(credential.user);
       logger.log('security_event', 'info', `User signed in with email: ${user.uid}`, { userId: user.uid });
       return user;
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === 'auth/invalid-credential' || error?.code === 'auth/user-not-found') {
+        const customErr = new Error('No account found with these credentials. If you are new, click "Create Account" to register, or use 1-Tap Phone access.');
+        (customErr as any).code = error.code;
+        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_IN_FAILED', action: 'signInWithEmail' });
+        throw customErr;
+      }
+      if (error?.code === 'auth/invalid-email') {
+        const customErr = new Error('Please enter a valid email address (e.g. investor@domain.com).');
+        (customErr as any).code = error.code;
+        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_IN_FAILED', action: 'signInWithEmail' });
+        throw customErr;
+      }
+      if (error?.code === 'auth/wrong-password') {
+        const customErr = new Error('Incorrect password. Please verify and try again.');
+        (customErr as any).code = error.code;
+        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_IN_FAILED', action: 'signInWithEmail' });
+        throw customErr;
+      }
       errorHandler.capture(error, { errorCode: 'AUTH_EMAIL_SIGN_IN_FAILED', action: 'signInWithEmail' });
       throw error;
     }
@@ -166,7 +184,25 @@ class FirebaseAuthService implements IAuthService {
       }
       logger.log('security_event', 'info', `User registered with email: ${user.uid}`, { userId: user.uid });
       return user;
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.code === 'auth/email-already-in-use') {
+        const customErr = new Error('An account already exists with this email. Switch to "Sign In" to log into your account.');
+        (customErr as any).code = error.code;
+        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_UP_FAILED', action: 'signUpWithEmail' });
+        throw customErr;
+      }
+      if (error?.code === 'auth/weak-password') {
+        const customErr = new Error('Password should be at least 6 characters long.');
+        (customErr as any).code = error.code;
+        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_UP_FAILED', action: 'signUpWithEmail' });
+        throw customErr;
+      }
+      if (error?.code === 'auth/invalid-email') {
+        const customErr = new Error('Please enter a valid email address (e.g. investor@domain.com).');
+        (customErr as any).code = error.code;
+        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_UP_FAILED', action: 'signUpWithEmail' });
+        throw customErr;
+      }
       errorHandler.capture(error, { errorCode: 'AUTH_EMAIL_SIGN_UP_FAILED', action: 'signUpWithEmail' });
       throw error;
     }
@@ -182,16 +218,28 @@ class FirebaseAuthService implements IAuthService {
       logger.log('security_event', 'info', `User signed in with Google: ${user.uid}`, { userId: user.uid });
       return user;
     } catch (error: any) {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'deployed domain';
       if (error?.code === 'auth/unauthorized-domain') {
-        const host = typeof window !== 'undefined' ? window.location.hostname : 'deployed domain';
-        const msg = `Google Sign-In is blocked because "${host}" is not in Firebase Authorized Domains. Please add "${host}" in Firebase Console > Authentication > Settings > Authorized domains. Or use Quick Investor Sign-In below.`;
+        const msg = `Google Sign-In blocked: "${host}" is not listed in Firebase Authorized Domains. Add "${host}" in Firebase Console > Authentication > Settings > Authorized domains, or use 1-Tap Phone Sign-In.`;
         const domainErr = new Error(msg);
         (domainErr as any).code = 'auth/unauthorized-domain';
         errorHandler.capture(domainErr, { errorCode: 'AUTH_UNAUTHORIZED_DOMAIN', action: 'signInWithGoogle' });
         throw domainErr;
       }
+      if (error?.code === 'auth/popup-closed-by-user') {
+        const msg = `Google popup was closed. If the window refused to connect (ERR_CONNECTION_REFUSED), "${host}" must be added to Firebase Console Authorized Domains. In the meantime, use 1-Tap Phone or Email Sign-In!`;
+        const popupErr = new Error(msg);
+        (popupErr as any).code = 'auth/popup-closed-by-user';
+        throw popupErr;
+      }
+      if (error?.code === 'auth/network-request-failed' || error?.message?.includes('network')) {
+        const msg = `Connection to Firebase Auth was refused. Please ensure "${host}" is added to Firebase Authorized Domains, or use 1-Tap Phone Sign-In.`;
+        const netErr = new Error(msg);
+        (netErr as any).code = 'auth/network-request-failed';
+        throw netErr;
+      }
       if (error?.code === 'auth/popup-blocked') {
-        const msg = 'Safari blocked the Google popup window. Tap to allow popups in Safari settings, or use Quick Investor Sign-In below.';
+        const msg = 'Safari or Chrome blocked the popup window. Tap to allow popups in browser settings, or use 1-Tap Phone Sign-In below.';
         const popupErr = new Error(msg);
         (popupErr as any).code = 'auth/popup-blocked';
         errorHandler.capture(popupErr, { errorCode: 'AUTH_POPUP_BLOCKED', action: 'signInWithGoogle' });

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Landmark, Smartphone, Mail, AlertCircle, Loader2, User, ArrowRight, ShieldAlert } from 'lucide-react';
+import { motion } from 'motion/react';
+import { Landmark, Smartphone, Mail, AlertCircle, Loader2, User, ArrowRight, ShieldAlert, Copy, Check, ExternalLink } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export const AuthScreen: React.FC = () => {
@@ -16,6 +16,7 @@ export const AuthScreen: React.FC = () => {
   const [loadingAction, setLoadingAction] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [domainWarning, setDomainWarning] = useState<string | null>(null);
+  const [copiedDomain, setCopiedDomain] = useState(false);
 
   // Email form state
   const [emailMode, setEmailMode] = useState<'signin' | 'signup'>('signin');
@@ -23,7 +24,17 @@ export const AuthScreen: React.FC = () => {
   const [password, setPassword] = useState('');
   const [customName, setCustomName] = useState('');
 
-  const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'deployed-domain.vercel.app';
+  const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'big-momma-investor-wars-dl7b.vercel.app';
+
+  const copyDomainToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(currentHost);
+      setCopiedDomain(true);
+      setTimeout(() => setCopiedDomain(false), 2000);
+    } catch {
+      // Fallback
+    }
+  };
 
   const handleGoogleLogin = async () => {
     setErrorMessage(null);
@@ -33,13 +44,22 @@ export const AuthScreen: React.FC = () => {
       await signInWithGoogle();
     } catch (err: any) {
       const msg = err?.message || String(err);
-      if (err?.code === 'auth/unauthorized-domain' || msg.includes('unauthorized-domain') || msg.includes('not in Firebase Authorized Domains')) {
+      if (
+        err?.code === 'auth/unauthorized-domain' ||
+        msg.includes('unauthorized-domain') ||
+        msg.includes('Authorized Domains')
+      ) {
         setDomainWarning(currentHost);
         setErrorMessage(
-          `Google Sign-In blocked: "${currentHost}" is not added to your Firebase Authorized Domains.`
+          `Google Sign-In blocked: "${currentHost}" is not added to Firebase Authorized Domains.`
         );
       } else if (err?.code === 'auth/popup-blocked' || msg.includes('popup-blocked')) {
-        setErrorMessage('iPhone Safari blocked the popup. Allow popups in Safari settings or use Quick Investor Sign-In below.');
+        setErrorMessage('Browser blocked the popup window. Allow popups in your browser settings or use 1-Tap Phone Sign-In.');
+      } else if (err?.code === 'auth/popup-closed-by-user') {
+        setDomainWarning(currentHost);
+        setErrorMessage(
+          `Google popup was closed. On Vercel deployments, you must add "${currentHost}" to Firebase Console > Authentication > Settings > Authorized domains. In the meantime, use 1-Tap Phone or Email Sign-In below!`
+        );
       } else {
         setErrorMessage(msg);
       }
@@ -50,6 +70,7 @@ export const AuthScreen: React.FC = () => {
 
   const handleQuickLogin = async (preset: 'phone_a' | 'phone_b' | 'custom') => {
     setErrorMessage(null);
+    setDomainWarning(null);
     setLoadingAction(preset);
     try {
       await signInWithQuickProfile(preset, customName);
@@ -62,34 +83,62 @@ export const AuthScreen: React.FC = () => {
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email || !password) {
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
       setErrorMessage('Please enter both email and password.');
       return;
     }
+
+    // Client-side email validation to catch single-character entries like 'r'
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      setErrorMessage('Please enter a valid email address (e.g. investor@example.com).');
+      return;
+    }
+
+    if (password.length < 6) {
+      setErrorMessage('Password must be at least 6 characters long.');
+      return;
+    }
+
     setErrorMessage(null);
     setLoadingAction('email');
     try {
       if (emailMode === 'signin') {
-        await signInWithEmail(email, password);
+        try {
+          await signInWithEmail(cleanEmail, password);
+        } catch (signErr: any) {
+          // If using sample test credentials and account doesn't exist yet, auto-provision smoothly
+          if (
+            (signErr?.code === 'auth/user-not-found' || signErr?.code === 'auth/invalid-credential') &&
+            cleanEmail.endsWith('@investorwars.dev')
+          ) {
+            const fallbackName = cleanEmail.includes('phone_a') ? 'Investor Alpha (Phone A)' : 'Investor Beta (Phone B)';
+            await signUpWithEmail(cleanEmail, password, customName || fallbackName);
+          } else {
+            throw signErr;
+          }
+        }
       } else {
-        await signUpWithEmail(email, password, customName || undefined);
+        await signUpWithEmail(cleanEmail, password, customName.trim() || undefined);
       }
     } catch (err: any) {
-      setErrorMessage(err?.message || 'Authentication failed. Check your credentials.');
+      setErrorMessage(err?.message || 'Authentication failed. Please check your credentials.');
     } finally {
       setLoadingAction(null);
     }
   };
 
   const fillTestCredentials = (account: 'a' | 'b') => {
+    setErrorMessage(null);
     if (account === 'a') {
       setEmail('phone_a@investorwars.dev');
       setPassword('Investor123!');
-      setCustomName('Investor Alpha (Phone A)');
+      setCustomName('Investor Alpha');
     } else {
       setEmail('phone_b@investorwars.dev');
       setPassword('Investor123!');
-      setCustomName('Investor Beta (Phone B)');
+      setCustomName('Investor Beta');
     }
   };
 
@@ -114,23 +163,52 @@ export const AuthScreen: React.FC = () => {
         <div className="p-6 space-y-5">
           {/* Domain Warning Explanation Banner */}
           {domainWarning && (
-            <div className="bg-amber-950/40 border border-amber-500/40 rounded-2xl p-4 text-xs text-amber-200 space-y-2">
+            <div className="bg-amber-950/40 border border-amber-500/40 rounded-2xl p-4 text-xs text-amber-200 space-y-3">
               <div className="flex items-center gap-2 font-bold text-amber-300">
                 <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0" />
-                <span>Why Google Sign-In Failed on Vercel:</span>
+                <span>Why Google OAuth Refused Connection:</span>
               </div>
-              <p className="text-slate-300 leading-relaxed">
-                Firebase restricts OAuth to authorized domains. <span className="font-mono text-amber-300 font-semibold">{domainWarning}</span> is not on your project's list yet.
+              <p className="text-slate-300 leading-relaxed text-[11px]">
+                Because your app is deployed on Vercel (<span className="font-mono text-amber-300">{domainWarning}</span>), Firebase blocks Google login popups until that domain is whitelisted.
               </p>
-              <div className="bg-slate-950/60 p-2.5 rounded-xl border border-amber-500/20 space-y-1 font-mono text-[11px]">
-                <p className="text-slate-400 font-sans font-bold">To permanently authorize Google OAuth:</p>
-                <p>1. Open <strong className="text-amber-300">Firebase Console</strong></p>
-                <p>2. Go to <strong className="text-amber-300">Authentication</strong> → <strong className="text-amber-300">Settings</strong> → <strong className="text-amber-300">Authorized domains</strong></p>
-                <p>3. Click <strong className="text-amber-300">Add domain</strong> and paste: <span className="text-emerald-400 underline">{domainWarning}</span></p>
+              
+              <div className="bg-slate-950/80 p-3 rounded-xl border border-amber-500/20 space-y-2 font-sans text-[11px]">
+                <p className="text-slate-400 font-bold">1-Minute Fix in Firebase Console:</p>
+                <ol className="list-decimal list-inside space-y-1 text-slate-300">
+                  <li>Go to <strong>Firebase Console</strong> → <strong>Authentication</strong></li>
+                  <li>Open <strong>Settings</strong> tab → <strong>Authorized domains</strong></li>
+                  <li>Click <strong>Add domain</strong> and paste your Vercel URL below:</li>
+                </ol>
+                
+                <div className="flex items-center gap-2 mt-1.5 pt-1 border-t border-slate-800">
+                  <code className="flex-1 bg-black/60 px-2.5 py-1.5 rounded-lg text-emerald-300 font-mono text-[11px] truncate select-all border border-slate-700">
+                    {domainWarning}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={copyDomainToClipboard}
+                    className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg flex items-center gap-1 text-[11px] font-bold shrink-0 transition-colors"
+                  >
+                    {copiedDomain ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedDomain ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
               </div>
-              <p className="text-emerald-300 font-medium">
-                👉 In the meantime, use <strong>Quick 1-Tap Access</strong> below to test multiplayer on both phones right now!
-              </p>
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[11px] text-emerald-300 font-medium">Or play immediately without OAuth:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('quick');
+                    setErrorMessage(null);
+                    setDomainWarning(null);
+                  }}
+                  className="text-xs text-white font-bold bg-emerald-600/80 hover:bg-emerald-500 px-3 py-1 rounded-lg transition-colors"
+                >
+                  Use 1-Tap Access →
+                </button>
+              </div>
             </div>
           )}
 
@@ -138,7 +216,14 @@ export const AuthScreen: React.FC = () => {
           {errorMessage && !domainWarning && (
             <div className="bg-rose-950/40 border border-rose-500/40 rounded-2xl p-3.5 flex items-start gap-2.5 text-xs text-rose-200">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <p className="leading-snug">{errorMessage}</p>
+              <div className="flex-1 leading-snug">
+                <p>{errorMessage}</p>
+                {errorMessage.includes('credentials') && (
+                  <p className="mt-1 text-[11px] text-rose-300 font-medium">
+                    Tip: Switch to <strong>Create Account</strong> if this is your first time, or tap <strong>1-Tap Phone</strong>.
+                  </p>
+                )}
+              </div>
             </div>
           )}
 
@@ -148,6 +233,7 @@ export const AuthScreen: React.FC = () => {
               onClick={() => {
                 setActiveTab('quick');
                 setErrorMessage(null);
+                setDomainWarning(null);
               }}
               className={`py-2 text-xs font-bold rounded-lg transition-all ${
                 activeTab === 'quick'
@@ -161,6 +247,7 @@ export const AuthScreen: React.FC = () => {
               onClick={() => {
                 setActiveTab('google');
                 setErrorMessage(null);
+                setDomainWarning(null);
               }}
               className={`py-2 text-xs font-bold rounded-lg transition-all ${
                 activeTab === 'google'
@@ -174,6 +261,7 @@ export const AuthScreen: React.FC = () => {
               onClick={() => {
                 setActiveTab('email');
                 setErrorMessage(null);
+                setDomainWarning(null);
               }}
               className={`py-2 text-xs font-bold rounded-lg transition-all ${
                 activeTab === 'email'
@@ -189,9 +277,9 @@ export const AuthScreen: React.FC = () => {
           {activeTab === 'quick' && (
             <div className="space-y-3">
               <div className="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-3.5 text-center">
-                <p className="text-xs text-slate-300 font-semibold mb-1">Instant 2-Phone Testing</p>
+                <p className="text-xs text-slate-300 font-semibold mb-1">Instant 2-Phone Testing (Recommended)</p>
                 <p className="text-[11px] text-slate-400">
-                  Select Phone A on device 1, and Phone B on device 2 to connect to room <strong className="text-emerald-400">BM-0X9X</strong>.
+                  Select Phone A on device 1, and Phone B on device 2 to connect to room <strong className="text-emerald-400">BM-0X9X</strong>. No passwords or OAuth required.
                 </p>
               </div>
 
@@ -246,7 +334,7 @@ export const AuthScreen: React.FC = () => {
                     <User className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                     <input
                       type="text"
-                      placeholder="Or enter custom name..."
+                      placeholder="Or enter custom investor name..."
                       value={customName}
                       onChange={(e) => setCustomName(e.target.value)}
                       className="w-full bg-slate-950/80 border border-slate-700/80 rounded-xl pl-9 pr-3 py-2.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
@@ -288,10 +376,23 @@ export const AuthScreen: React.FC = () => {
                 <span>AUTHORIZE WITH GOOGLE</span>
               </button>
 
-              <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 text-[11px] text-slate-400 space-y-1">
-                <p className="text-slate-300 font-semibold">Note for Vercel Deployments:</p>
-                <p>
-                  If Google blocks your login, add <span className="font-mono text-emerald-400 font-bold">{currentHost}</span> to Firebase Console Authorized Domains, or switch to the <strong>1-Tap Phone</strong> tab!
+              <div className="bg-slate-950/80 p-3.5 rounded-xl border border-slate-800 text-[11px] text-slate-300 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-slate-200">Vercel Domain Authorization:</span>
+                  <button
+                    type="button"
+                    onClick={copyDomainToClipboard}
+                    className="text-[10px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center gap-1"
+                  >
+                    {copiedDomain ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    <span>{copiedDomain ? 'Copied Domain' : 'Copy Domain'}</span>
+                  </button>
+                </div>
+                <p className="text-slate-400 leading-relaxed">
+                  If Google popup shows <em>"refused to connect"</em>, add <code className="text-emerald-300 font-mono select-all">{currentHost}</code> in Firebase Console under Authentication → Settings → Authorized domains.
+                </p>
+                <p className="text-[10px] text-slate-500">
+                  Tip: The <strong>1-Tap Phone</strong> tab bypasses domain whitelisting completely.
                 </p>
               </div>
             </div>
@@ -303,18 +404,24 @@ export const AuthScreen: React.FC = () => {
               <div className="flex gap-2 mb-2">
                 <button
                   type="button"
-                  onClick={() => setEmailMode('signin')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg ${
-                    emailMode === 'signin' ? 'bg-slate-800 text-emerald-300' : 'text-slate-500'
+                  onClick={() => {
+                    setEmailMode('signin');
+                    setErrorMessage(null);
+                  }}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                    emailMode === 'signin' ? 'bg-slate-800 text-emerald-300 border border-slate-700' : 'text-slate-500 hover:text-slate-300'
                   }`}
                 >
                   Sign In
                 </button>
                 <button
                   type="button"
-                  onClick={() => setEmailMode('signup')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg ${
-                    emailMode === 'signup' ? 'bg-slate-800 text-emerald-300' : 'text-slate-500'
+                  onClick={() => {
+                    setEmailMode('signup');
+                    setErrorMessage(null);
+                  }}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                    emailMode === 'signup' ? 'bg-slate-800 text-emerald-300 border border-slate-700' : 'text-slate-500 hover:text-slate-300'
                   }`}
                 >
                   Create Account
@@ -339,9 +446,12 @@ export const AuthScreen: React.FC = () => {
                 <input
                   type="email"
                   required
-                  placeholder="investor@wars.dev"
+                  placeholder="investor@example.com"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (errorMessage) setErrorMessage(null);
+                  }}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
                 />
               </div>
@@ -351,9 +461,12 @@ export const AuthScreen: React.FC = () => {
                 <input
                   type="password"
                   required
-                  placeholder="••••••••"
+                  placeholder="At least 6 characters"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (errorMessage) setErrorMessage(null);
+                  }}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
                 />
               </div>
@@ -362,14 +475,14 @@ export const AuthScreen: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => fillTestCredentials('a')}
-                  className="flex-1 py-1 bg-slate-800/80 hover:bg-slate-700 text-[10px] text-slate-400 rounded-lg"
+                  className="flex-1 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-[10px] text-slate-300 font-medium rounded-lg border border-slate-700/60 transition-colors"
                 >
                   Fill Phone A Creds
                 </button>
                 <button
                   type="button"
                   onClick={() => fillTestCredentials('b')}
-                  className="flex-1 py-1 bg-slate-800/80 hover:bg-slate-700 text-[10px] text-slate-400 rounded-lg"
+                  className="flex-1 py-1.5 bg-slate-800/80 hover:bg-slate-700 text-[10px] text-slate-300 font-medium rounded-lg border border-slate-700/60 transition-colors"
                 >
                   Fill Phone B Creds
                 </button>
@@ -378,7 +491,7 @@ export const AuthScreen: React.FC = () => {
               <button
                 type="submit"
                 disabled={Boolean(loadingAction) || authLoading}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 mt-2"
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-50 mt-2 shadow-lg shadow-emerald-950/40"
               >
                 {loadingAction === 'email' ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -387,6 +500,21 @@ export const AuthScreen: React.FC = () => {
                 )}
                 <span>{emailMode === 'signin' ? 'Sign In' : 'Create Account'}</span>
               </button>
+
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmailMode(emailMode === 'signin' ? 'signup' : 'signin');
+                    setErrorMessage(null);
+                  }}
+                  className="text-[11px] text-slate-400 hover:text-emerald-300 transition-colors"
+                >
+                  {emailMode === 'signin'
+                    ? "Don't have an account? Create one now"
+                    : 'Already registered? Sign in here'}
+                </button>
+              </div>
             </form>
           )}
 
