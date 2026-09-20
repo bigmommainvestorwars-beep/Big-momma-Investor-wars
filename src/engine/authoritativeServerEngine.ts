@@ -199,6 +199,10 @@ export class AuthoritativeServerEngine {
     return this.matches.get(matchId);
   }
 
+  public getAllMatches(): Map<string, AuthoritativeMatchContainer> {
+    return this.matches;
+  }
+
   public getMatch(matchId: string): FirestoreMatchDoc | undefined {
     return this.matches.get(matchId)?.match;
   }

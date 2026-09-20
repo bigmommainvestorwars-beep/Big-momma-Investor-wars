@@ -513,15 +513,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setQueueTimeSeconds(0);
 
     try {
-      // Simulate quick queue handshake for smooth user feedback
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
       const reqId = `qm_${Date.now()}`;
       const res = await cloudFunctionsClient.findOrCreateQuickMatch(reqId);
       setMatchmakingQueueState('matched');
-
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      setMatchmakingQueueState('joining');
 
       const matchId = res.data?.matchId;
       if (!matchId) throw new Error('Failed to resolve matchmaking room.');

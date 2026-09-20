@@ -108,10 +108,10 @@ export const HomeScreen: React.FC = () => {
     setLobbyJoinError(null);
     setCodeError(null);
     try {
-      if (accessCode) {
-        await joinByRoomCode(accessCode);
-      } else {
+      if (matchId) {
         await joinMatch(matchId);
+      } else if (accessCode) {
+        await joinByRoomCode(accessCode);
       }
       navigate('LOBBY');
     } catch (err: any) {
