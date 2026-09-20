@@ -93,7 +93,7 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
     if (activeMatchId && match) {
       if (match.status === 'completed' && currentScreen !== 'GAME_OVER' && currentScreen !== 'RESULTS') {
         navigate('GAME_OVER');
-      } else if (match.status === 'in_progress' && (currentScreen === 'LOBBY' || currentScreen === 'MATCH_SETUP')) {
+      } else if ((match.status === 'in_progress' || match.status === 'active') && (currentScreen === 'LOBBY' || currentScreen === 'MATCH_SETUP')) {
         navigate('GAMEPLAY');
       }
     } else if (!activeMatchId && currentScreen === 'GAMEPLAY') {

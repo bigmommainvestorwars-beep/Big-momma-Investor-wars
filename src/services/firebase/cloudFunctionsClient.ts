@@ -167,8 +167,15 @@ export class CloudFunctionsClient {
         const boardId = (p.boardId as string) || 'default-standard-board';
         const rulesetVersion = (p.rulesetVersion as string) || '1.0.0';
         const isPrivate = (p.isPrivate as boolean) || false;
-        const accessCode = (p.accessCode as string) || (IS_TEST_ROOM_MODE ? TEST_ROOM_CODE : undefined);
-        const matchId = IS_TEST_ROOM_MODE ? TEST_MATCH_ID : data.matchId;
+        const isExplicitTestMatch =
+          data.matchId === TEST_MATCH_ID ||
+          (p.accessCode as string) === TEST_ROOM_CODE ||
+          (IS_TEST_ROOM_MODE && isPrivate && !p.accessCode && (!data.matchId || data.matchId === TEST_MATCH_ID));
+
+        const accessCode = (p.accessCode as string) || (isExplicitTestMatch ? TEST_ROOM_CODE : undefined);
+        const matchId = isExplicitTestMatch
+          ? TEST_MATCH_ID
+          : (data.matchId || `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`);
 
         resultData = authoritativeServerEngine.createMatch(
           matchId,
@@ -182,7 +189,7 @@ export class CloudFunctionsClient {
         );
 
         // Required Authoritative Diagnostic Log for Client A
-        console.log(`CLIENT A userId: ${currentUserId} matchId: ${matchId} roomCode: ${accessCode || TEST_ROOM_CODE}`);
+        console.log(`[CloudFunctionsClient] createMatch success: userId: ${currentUserId} matchId: ${matchId} roomCode: ${accessCode || TEST_ROOM_CODE}`);
         break;
       }
       case 'findOrCreateQuickMatch': {
@@ -469,7 +476,8 @@ export class CloudFunctionsClient {
       data.matchId ||
       (resultData as any)?.matchId ||
       (resultData as any)?.id ||
-      (IS_TEST_ROOM_MODE ? TEST_MATCH_ID : undefined);
+      ((resultData as any)?.match?.id) ||
+      (IS_TEST_ROOM_MODE && !data.matchId ? TEST_MATCH_ID : undefined);
 
     const container = resolvedMatchId ? authoritativeServerEngine.getMatchContainer(resolvedMatchId) : undefined;
 
