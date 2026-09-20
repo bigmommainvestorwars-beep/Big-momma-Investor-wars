@@ -18,7 +18,7 @@ import {
 import { getFirebaseFunctions, getFirebaseAuth, getFirebaseFirestore } from './config';
 import { errorHandler } from '../monitoring/errorHandler';
 import { authoritativeServerEngine } from '../../engine/authoritativeServerEngine';
-import { ServerFunctionError } from '../../../functions/src/types/contracts';
+import { ServerFunctionError, SERVER_ERROR_CODES } from '../../../functions/src/types/contracts';
 import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../config/testRoomConfig';
 import { FirestoreMatchDoc, FirestorePlayerDoc } from './matchSyncService';
 
@@ -207,6 +207,12 @@ export class CloudFunctionsClient {
       case 'joinMatchByAccessCode': {
         const rawCodeInput = (p.accessCode as string) || '';
         const cleanCode = rawCodeInput.trim().toUpperCase();
+        if (!cleanCode) {
+          throw new ServerFunctionError(
+            SERVER_ERROR_CODES.INVALID_CHOICE,
+            'Please enter a valid match room code.'
+          );
+        }
         const rawCode = cleanCode.replace(/^BM-/, '');
         const bmCode = `BM-${rawCode}`;
         const isTestCode =
@@ -216,26 +222,50 @@ export class CloudFunctionsClient {
           cleanCode === TEST_MATCH_ID.toUpperCase() ||
           (IS_TEST_ROOM_MODE && (!cleanCode || cleanCode === 'BM-0X9X'));
 
-        let targetMatchId = isTestCode ? TEST_MATCH_ID : undefined;
+        let targetMatchId = isTestCode ? TEST_MATCH_ID : authoritativeServerEngine.findMatchIdByAccessCode(cleanCode);
 
         // Check in-memory engine first
         let container = targetMatchId ? authoritativeServerEngine.getMatchContainer(targetMatchId) : undefined;
 
-        // If not in local memory, check Cloud Firestore
+        // If not found in local memory, query Cloud Firestore matches collection
         const db = getFirebaseFirestore();
-        if (db) {
+        if (db && !container) {
           if (!targetMatchId) {
             try {
               const matchesCol = collection(db, 'matches');
-              const q1 = query(matchesCol, where('accessCode', '==', cleanCode), limit(1));
-              const s1 = await getDocs(q1);
-              if (!s1.empty) {
-                targetMatchId = s1.docs[0].id;
-              } else {
+
+              // 1. Direct document lookup if user entered a raw matchId
+              if (rawCodeInput.trim()) {
+                const directDoc = await getDoc(doc(db, 'matches', rawCodeInput.trim()));
+                if (directDoc.exists()) {
+                  targetMatchId = directDoc.id;
+                }
+              }
+
+              // 2. Query accessCode matching cleanCode
+              if (!targetMatchId && cleanCode) {
+                const q1 = query(matchesCol, where('accessCode', '==', cleanCode), limit(1));
+                const s1 = await getDocs(q1);
+                if (!s1.empty) {
+                  targetMatchId = s1.docs[0].id;
+                }
+              }
+
+              // 3. Query accessCode matching bmCode (e.g. BM-XXXX)
+              if (!targetMatchId && bmCode) {
                 const q2 = query(matchesCol, where('accessCode', '==', bmCode), limit(1));
                 const s2 = await getDocs(q2);
                 if (!s2.empty) {
                   targetMatchId = s2.docs[0].id;
+                }
+              }
+
+              // 4. Query accessCode matching rawCode without prefix
+              if (!targetMatchId && rawCode && rawCode !== cleanCode) {
+                const q3 = query(matchesCol, where('accessCode', '==', rawCode), limit(1));
+                const s3 = await getDocs(q3);
+                if (!s3.empty) {
+                  targetMatchId = s3.docs[0].id;
                 }
               }
             } catch (err) {
@@ -249,11 +279,46 @@ export class CloudFunctionsClient {
               const mSnap = await getDoc(mDocRef);
               if (mSnap.exists()) {
                 const matchData = { id: mSnap.id, ...mSnap.data() } as FirestoreMatchDoc;
+
+                const now = Date.now();
+                const lastActive = matchData.updatedAt || matchData.createdAt || 0;
+                const isStale = (now - lastActive > 5 * 60 * 1000);
+                if ((matchData as any).isDeleted || matchData.status === 'abandoned' || isStale) {
+                  throw new ServerFunctionError(
+                    SERVER_ERROR_CODES.MATCH_NOT_FOUND,
+                    `Lobby "${cleanCode}" was closed or abandoned due to inactivity.`
+                  );
+                }
+
+                if (matchData.status === 'active' || matchData.status === 'in_progress') {
+                  throw new ServerFunctionError(
+                    SERVER_ERROR_CODES.INVALID_STATE_TRANSITION,
+                    `Match "${cleanCode}" is already in progress and can no longer be joined.`
+                  );
+                }
+
+                if (matchData.status === 'completed') {
+                  throw new ServerFunctionError(
+                    SERVER_ERROR_CODES.INVALID_STATE_TRANSITION,
+                    `Match "${cleanCode}" has already ended.`
+                  );
+                }
+
                 const pSnap = await getDocs(collection(db, 'matches', targetMatchId, 'players'));
                 const playersData = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
+                const activePlayerCount = playersData.filter((pl) => pl.status === 'active' || pl.status === 'disconnected').length;
+
+                if (activePlayerCount >= 4) {
+                  throw new ServerFunctionError(
+                    SERVER_ERROR_CODES.ACTION_LIMIT_REACHED,
+                    `Lobby "${cleanCode}" is full (maximum 4 players).`
+                  );
+                }
+
                 container = authoritativeServerEngine.hydrateMatchContainer(matchData, playersData);
               }
             } catch (err) {
+              if (err instanceof ServerFunctionError) throw err;
               console.warn('[CloudFunctionsClient] Firestore hydration notice:', err);
             }
           }

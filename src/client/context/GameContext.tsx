@@ -140,8 +140,11 @@ function formatUserFacingMatchError(err: unknown): string {
   }
 
   // Match not found
-  if (code === 'MATCH_NOT_FOUND' || detailsCode === 'MATCH_NOT_FOUND') {
-    return '[MATCH_NOT_FOUND] The requested match could not be found.';
+  if (code === 'MATCH_NOT_FOUND' || detailsCode === 'MATCH_NOT_FOUND' || code === 'LOBBY_NOT_FOUND') {
+    if (message && !message.includes('[object Object]') && message !== 'internal' && !message.startsWith('[MATCH_NOT_FOUND]')) {
+      return message;
+    }
+    return 'No active lobby found for the specified room code.';
   }
 
   // Not your turn

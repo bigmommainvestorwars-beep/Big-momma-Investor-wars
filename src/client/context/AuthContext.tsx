@@ -42,24 +42,83 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const hasFirebase = authService.isConfigured();
   const [isLocalTestMode, setIsLocalTestModeState] = useState<boolean>(!hasFirebase);
   
-  // Check for saved investor profile in localStorage
-  const getInitialUser = (): User | null => {
-    if (typeof window === 'undefined') return !hasFirebase ? DEFAULT_LOCAL_TEST_USER : null;
+  // Synchronously compute initial user state immediately on initialization
+  const resolveInitialUser = (): { user: User | null; isAuthenticated: boolean } => {
+    // 1. Try Firebase Auth currentUser directly
     try {
-      const saved = localStorage.getItem('investor_wars_persisted_user');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed?.uid) return parsed;
+      const fbUser = authService.getCurrentUser();
+      if (fbUser?.uid) {
+        let displayName = fbUser.displayName;
+        if (!displayName && typeof window !== 'undefined') {
+          const storedName = localStorage.getItem('investor_wars_client_name');
+          if (storedName && storedName !== 'Investor' && storedName !== 'Elite Investor') {
+            displayName = storedName;
+          }
+        }
+        if (!displayName && fbUser.email) {
+          displayName = fbUser.email.split('@')[0];
+        }
+        const resolved: User = {
+          ...fbUser,
+          displayName: displayName || 'Investor',
+        };
+        setActiveClientUser({ uid: resolved.uid, displayName: resolved.displayName || 'Investor' });
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('investor_wars_client_uid', resolved.uid);
+          localStorage.setItem('investor_wars_client_name', resolved.displayName || 'Investor');
+          localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolved));
+        }
+        return { user: resolved, isAuthenticated: true };
       }
     } catch {}
-    return !hasFirebase ? DEFAULT_LOCAL_TEST_USER : null;
+
+    // 2. Check saved investor profile in localStorage
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('investor_wars_persisted_user');
+        const storedUid = localStorage.getItem('investor_wars_client_uid');
+        const storedName = localStorage.getItem('investor_wars_client_name');
+
+        if (saved) {
+          const parsed = JSON.parse(saved) as User;
+          if (parsed?.uid) {
+            if (storedName && storedName !== 'Investor' && storedName !== 'Elite Investor') {
+              parsed.displayName = storedName;
+            }
+            setActiveClientUser({ uid: parsed.uid, displayName: parsed.displayName || 'Investor' });
+            return { user: parsed, isAuthenticated: true };
+          }
+        } else if (storedUid) {
+          const fallbackUser: User = {
+            uid: storedUid,
+            email: 'founder@investorwars.dev',
+            displayName: storedName || 'Investor',
+            photoURL: null,
+            emailVerified: true,
+            createdAt: Date.now(),
+            lastLoginAt: Date.now(),
+          };
+          setActiveClientUser({ uid: fallbackUser.uid, displayName: fallbackUser.displayName || 'Investor' });
+          return { user: fallbackUser, isAuthenticated: true };
+        }
+      } catch {}
+    }
+
+    if (!hasFirebase) {
+      setActiveClientUser({ uid: DEFAULT_LOCAL_TEST_USER.uid, displayName: DEFAULT_LOCAL_TEST_USER.displayName || 'Investor' });
+      return { user: DEFAULT_LOCAL_TEST_USER, isAuthenticated: true };
+    }
+
+    return { user: null, isAuthenticated: false };
   };
 
-  const [mockUser, setMockUser] = useState<User | null>(getInitialUser);
+  const initialResolved = resolveInitialUser();
+
+  const [mockUser, setMockUser] = useState<User | null>(initialResolved.user);
   const [firebaseAuthState, setFirebaseAuthState] = useState<AuthState>({
-    isAuthenticated: false,
-    user: null,
-    isLoading: hasFirebase,
+    isAuthenticated: initialResolved.isAuthenticated,
+    user: initialResolved.user,
+    isLoading: hasFirebase && !initialResolved.user,
     error: null,
   });
 
@@ -167,9 +226,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       if (user) {
         setActiveClientUser({ uid: user.uid, displayName: effectiveDisplayName });
+        const resolvedUser: User = { ...user, displayName: effectiveDisplayName };
         if (typeof window !== 'undefined') {
           localStorage.setItem('investor_wars_client_uid', user.uid);
           localStorage.setItem('investor_wars_client_name', effectiveDisplayName);
+          localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolvedUser));
+        }
+        setMockUser(resolvedUser);
+      } else {
+        const storedUid = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null;
+        if (!storedUid) {
+          setActiveClientUser(null);
+          setMockUser(null);
         }
       }
     });
@@ -191,14 +259,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       displayName: trimmed,
     });
 
-    setFirebaseAuthState((prev) => ({
-      ...prev,
-      user: prev.user ? { ...prev.user, displayName: trimmed } : null,
-    }));
+    setFirebaseAuthState((prev) => {
+      const updatedUser = prev.user ? { ...prev.user, displayName: trimmed } : null;
+      if (updatedUser && typeof window !== 'undefined') {
+        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(updatedUser));
+      }
+      return {
+        ...prev,
+        user: updatedUser,
+      };
+    });
 
-    if (mockUser) {
-      setMockUser((prev) => (prev ? { ...prev, displayName: trimmed } : null));
-    }
+    setMockUser((prev) => {
+      const updatedUser = prev ? { ...prev, displayName: trimmed } : null;
+      if (updatedUser && typeof window !== 'undefined') {
+        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(updatedUser));
+      }
+      return updatedUser;
+    });
 
     try {
       await authService.updateCurrentUserProfile(trimmed);

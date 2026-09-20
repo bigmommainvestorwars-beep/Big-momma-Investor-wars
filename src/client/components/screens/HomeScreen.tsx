@@ -20,6 +20,9 @@ import {
   Shield,
   Sparkles,
   Trash2,
+  SearchX,
+  LogIn,
+  ArrowRight,
 } from 'lucide-react';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
@@ -34,6 +37,7 @@ export const HomeScreen: React.FC = () => {
     activeMatchId,
     startQuickMatchQueue,
     joinByRoomCode,
+    joinMatch,
     createPrivateMatch,
     openMatches,
     connectionStatus,
@@ -46,9 +50,12 @@ export const HomeScreen: React.FC = () => {
   const [isJoiningCode, setIsJoiningCode] = useState(false);
   const [isHosting, setIsHosting] = useState(false);
   const [isPurgingLobbies, setIsPurgingLobbies] = useState(false);
+  const [joiningLobbyId, setJoiningLobbyId] = useState<string | null>(null);
+  const [lobbyJoinError, setLobbyJoinError] = useState<string | null>(null);
 
   const handlePurgeAllLobbies = async () => {
     setIsPurgingLobbies(true);
+    setLobbyJoinError(null);
     try {
       await cloudFunctionsClient.deleteAllOpenLobbies();
     } catch (e) {
@@ -62,6 +69,8 @@ export const HomeScreen: React.FC = () => {
 
   const handleQuickMatch = async () => {
     setIsQuickMatching(true);
+    setCodeError(null);
+    setLobbyJoinError(null);
     try {
       await startQuickMatchQueue();
       // Auto-transitions to GAMEPLAY or LOBBY once state updates
@@ -75,21 +84,48 @@ export const HomeScreen: React.FC = () => {
 
   const handleJoinWithCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!roomCodeInput.trim()) return;
+    const clean = roomCodeInput.trim().toUpperCase();
+    if (!clean) {
+      setCodeError('Please enter a room access code (e.g. BM-0X9X).');
+      return;
+    }
     setIsJoiningCode(true);
     setCodeError(null);
+    setLobbyJoinError(null);
     try {
-      await joinByRoomCode(roomCodeInput.trim().toUpperCase());
+      await joinByRoomCode(clean);
       navigate('LOBBY');
     } catch (err: any) {
-      setCodeError(err?.message || 'Invalid or expired room code.');
+      const msg = err?.message || `No active lobby found for room code "${clean}".`;
+      setCodeError(msg);
     } finally {
       setIsJoiningCode(false);
     }
   };
 
+  const handleDirectLobbyJoin = async (matchId: string, accessCode?: string) => {
+    setJoiningLobbyId(matchId);
+    setLobbyJoinError(null);
+    setCodeError(null);
+    try {
+      if (accessCode) {
+        await joinByRoomCode(accessCode);
+      } else {
+        await joinMatch(matchId);
+      }
+      navigate('LOBBY');
+    } catch (err: any) {
+      const msg = err?.message || 'Lobby is no longer available or was closed.';
+      setLobbyJoinError(msg);
+    } finally {
+      setJoiningLobbyId(null);
+    }
+  };
+
   const handleHostPrivate = async () => {
     setIsHosting(true);
+    setCodeError(null);
+    setLobbyJoinError(null);
     try {
       await createPrivateMatch();
       navigate('LOBBY');
@@ -190,7 +226,10 @@ export const HomeScreen: React.FC = () => {
             {!showCodeInput ? (
               <button
                 id="toggle-join-code-btn"
-                onClick={() => setShowCodeInput(true)}
+                onClick={() => {
+                  setShowCodeInput(true);
+                  setCodeError(null);
+                }}
                 className="w-full py-2 px-3 rounded-xl flex items-center justify-between text-slate-300 hover:text-white transition-all text-xs font-bold tracking-wider uppercase text-left cursor-pointer"
               >
                 <div className="flex items-center gap-2.5">
@@ -205,8 +244,11 @@ export const HomeScreen: React.FC = () => {
                   <span>Room Access Code</span>
                   <button
                     type="button"
-                    onClick={() => setShowCodeInput(false)}
-                    className="text-slate-500 hover:text-slate-300 cursor-pointer"
+                    onClick={() => {
+                      setShowCodeInput(false);
+                      setCodeError(null);
+                    }}
+                    className="text-slate-500 hover:text-slate-300 cursor-pointer text-[10px]"
                   >
                     Cancel
                   </button>
@@ -217,28 +259,162 @@ export const HomeScreen: React.FC = () => {
                     type="text"
                     placeholder="e.g. BM-0X9X"
                     value={roomCodeInput}
-                    onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
+                    disabled={isJoiningCode}
+                    onChange={(e) => {
+                      setRoomCodeInput(e.target.value.toUpperCase());
+                      if (codeError) setCodeError(null);
+                    }}
                     maxLength={10}
-                    className="flex-1 bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs font-mono font-bold tracking-widest text-white uppercase focus:outline-none placeholder:text-slate-600"
+                    className={`flex-1 bg-slate-950 border ${
+                      codeError ? 'border-rose-500/80 focus:border-rose-400 text-rose-100' : 'border-slate-700 focus:border-cyan-400 text-white'
+                    } rounded-xl px-3 py-2 text-xs font-mono font-bold tracking-widest uppercase focus:outline-none placeholder:text-slate-600 transition-colors disabled:opacity-50`}
                   />
                   <button
                     id="submit-join-code-btn"
                     type="submit"
                     disabled={isJoiningCode || !roomCodeInput.trim()}
-                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 active:scale-95 disabled:opacity-40 text-white rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-all"
+                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 active:scale-95 disabled:opacity-40 text-white rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-all flex items-center justify-center min-w-[90px]"
                   >
-                    {isJoiningCode ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Join Match'}
+                    {isJoiningCode ? (
+                      <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                    ) : (
+                      'Join Match'
+                    )}
                   </button>
                 </div>
+
+                {/* Quick test code shortcut helper */}
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 px-0.5">
+                  <span>Quick fill test room:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoomCodeInput('BM-0X9X');
+                      setCodeError(null);
+                    }}
+                    className="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer"
+                  >
+                    BM-0X9X
+                  </button>
+                </div>
+
+                {/* Active search feedback */}
+                {isJoiningCode && (
+                  <div className="bg-cyan-950/40 border border-cyan-800/60 rounded-xl px-3 py-2 text-[11px] font-mono text-cyan-300 flex items-center gap-2 animate-pulse">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400 shrink-0" />
+                    <span>Querying Firestore for room {roomCodeInput.trim().toUpperCase()}...</span>
+                  </div>
+                )}
+
+                {/* Visual feedback for Not Found or other errors */}
                 {codeError && (
-                  <div className="text-[10px] font-mono text-rose-400 flex items-center gap-1">
-                    <ShieldAlert className="w-3 h-3" />
-                    <span>{codeError}</span>
+                  <div className="bg-rose-950/50 border border-rose-800/80 rounded-xl p-3 text-xs space-y-2">
+                    <div className="flex items-start gap-2.5">
+                      <SearchX className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <div className="font-bold text-rose-200">
+                          {codeError.includes('full')
+                            ? 'Lobby Is Full'
+                            : codeError.includes('progress')
+                            ? 'Match In Progress'
+                            : 'Room Not Found'}
+                        </div>
+                        <div className="text-[11px] text-rose-300/90 font-sans leading-relaxed">
+                          {codeError}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 pt-1 border-t border-rose-900/50 text-[10px] font-mono">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRoomCodeInput('BM-0X9X');
+                          setCodeError(null);
+                        }}
+                        className="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer"
+                      >
+                        Try BM-0X9X
+                      </button>
+                      <span className="text-slate-600">•</span>
+                      <button
+                        type="button"
+                        onClick={handleHostPrivate}
+                        className="text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer"
+                      >
+                        Host New Lobby
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCodeError(null)}
+                        className="text-slate-400 hover:text-slate-200 cursor-pointer ml-auto"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
                   </div>
                 )}
               </form>
             )}
           </div>
+
+          {/* Open Public Lobbies List (Mobile & Desktop Sidebar) */}
+          {openMatches.length > 0 && (
+            <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-3 space-y-2">
+              <div className="flex items-center justify-between text-[11px] font-mono text-emerald-400 uppercase tracking-wider">
+                <span className="flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5" />
+                  Live Lobbies ({openMatches.length})
+                </span>
+                <span className="text-[10px] text-slate-500">Tap to Join</span>
+              </div>
+              
+              {lobbyJoinError && (
+                <div className="text-[10px] font-mono text-rose-400 flex items-center gap-1.5 bg-rose-950/40 border border-rose-900/50 rounded-lg p-2">
+                  <SearchX className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{lobbyJoinError}</span>
+                </div>
+              )}
+
+              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                {openMatches.map((m) => {
+                  const pCount = Array.isArray(m.participantUserIds) ? m.participantUserIds.length : 1;
+                  const displayCode = m.accessCode || m.id.substring(0, 8).toUpperCase();
+                  const isCurrentJoining = joiningLobbyId === m.id;
+
+                  return (
+                    <div
+                      key={m.id}
+                      className="flex items-center justify-between p-2 rounded-xl bg-slate-950 border border-slate-800/80 hover:border-slate-700 transition-colors"
+                    >
+                      <div className="truncate mr-2">
+                        <div className="text-xs font-mono font-bold text-white flex items-center gap-1.5">
+                          <span className="text-emerald-400">#</span>
+                          <span>{displayCode}</span>
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-500">
+                          {pCount}/4 Players
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleDirectLobbyJoin(m.id, m.accessCode)}
+                        disabled={joiningLobbyId !== null}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer disabled:opacity-40 transition-all shrink-0"
+                      >
+                        {isCurrentJoining ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <>
+                            <span>Join</span>
+                            <ArrowRight className="w-3 h-3" />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Host Private Match / Create Investor Lobby */}
           <button

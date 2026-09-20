@@ -756,6 +756,31 @@ export class AuthoritativeServerEngine {
     };
   }
 
+  public findMatchIdByAccessCode(accessCode: string): string | undefined {
+    const cleanCode = accessCode.trim().toUpperCase();
+    const rawCode = cleanCode.replace(/^BM-/, '');
+    const bmCode = `BM-${rawCode}`;
+
+    for (const [id, container] of this.matches.entries()) {
+      const matchCode = (container.match.accessCode || '').toUpperCase();
+      const matchRawCode = matchCode.replace(/^BM-/, '');
+      const matchIdClean = id.toUpperCase();
+      if (
+        matchCode === cleanCode ||
+        matchCode === bmCode ||
+        matchRawCode === rawCode ||
+        matchIdClean === cleanCode ||
+        matchIdClean === bmCode ||
+        matchIdClean.endsWith(rawCode) ||
+        matchIdClean.endsWith(cleanCode) ||
+        id === accessCode.trim()
+      ) {
+        return id;
+      }
+    }
+    return undefined;
+  }
+
   /**
    * 3g. joinMatchByAccessCode
    * Allows joining private or public lobbies via 6-character access code or match ID.
@@ -792,12 +817,11 @@ export class AuthoritativeServerEngine {
     }
 
     for (const [id, container] of this.matches.entries()) {
-      if (container.match.status !== 'waiting_for_players') continue;
       const matchCode = (container.match.accessCode || '').toUpperCase();
       const matchRawCode = matchCode.replace(/^BM-/, '');
       const matchIdClean = id.toUpperCase();
 
-      if (
+      const matchesThis =
         matchCode === cleanCode ||
         matchCode === bmCode ||
         matchRawCode === rawCode ||
@@ -805,15 +829,40 @@ export class AuthoritativeServerEngine {
         matchIdClean === bmCode ||
         matchIdClean.endsWith(rawCode) ||
         matchIdClean.endsWith(cleanCode) ||
-        id === accessCode.trim()
-      ) {
+        id === accessCode.trim();
+
+      if (matchesThis) {
+        if (container.match.status === 'abandoned' || (container.match as any).isDeleted) {
+          throw new ServerFunctionError(
+            SERVER_ERROR_CODES.MATCH_NOT_FOUND,
+            `Lobby "${cleanCode}" was closed or abandoned due to inactivity.`
+          );
+        }
+        if (container.match.status === 'in_progress' || container.match.status === 'active') {
+          throw new ServerFunctionError(
+            SERVER_ERROR_CODES.INVALID_STATE_TRANSITION,
+            `Match "${cleanCode}" is already in progress and can no longer be joined.`
+          );
+        }
+        if (container.match.status === 'completed') {
+          throw new ServerFunctionError(
+            SERVER_ERROR_CODES.INVALID_STATE_TRANSITION,
+            `Match "${cleanCode}" has already concluded.`
+          );
+        }
+        if (container.players.size >= 4) {
+          throw new ServerFunctionError(
+            SERVER_ERROR_CODES.ACTION_LIMIT_REACHED,
+            `Lobby "${cleanCode}" is full (maximum 4 players).`
+          );
+        }
         const player = this.joinMatch(id, requestId, userId, displayName);
         return { matchId: id, player };
       }
     }
     throw new ServerFunctionError(
       SERVER_ERROR_CODES.MATCH_NOT_FOUND,
-      `No open lobby found for match code "${accessCode}".`
+      `No active lobby found for room code "${cleanCode}". Please verify the code or host a new match.`
     );
   }
 
