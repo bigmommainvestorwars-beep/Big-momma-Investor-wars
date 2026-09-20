@@ -6,6 +6,8 @@
 import {
   collection,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
   query,
   where,
@@ -246,41 +248,56 @@ export class MatchSyncService {
 
     const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
+    let pollInterval: NodeJS.Timeout | null = null;
 
     if (db) {
       const matchRef = doc(db, 'matches', matchId);
-      fsUnsub = onSnapshot(
-        matchRef,
-        (snap) => {
-          if (snap.exists()) {
-            const matchDoc = { id: snap.id, ...snap.data() } as FirestoreMatchDoc;
-            onData(matchDoc);
-            // Synchronize in-memory engine state
-            if (this.localContainerProvider) {
-              const local = this.localContainerProvider(matchId);
-              if (local) {
-                Object.assign(local.match, matchDoc);
-              }
-            }
-            for (const cb of this.matchSyncCallbacks) {
-              try {
-                cb(matchId, matchDoc);
-              } catch (e) {
-                console.warn('[MatchSyncService] Match callback error:', e);
-              }
+
+      const processMatchSnap = (snap: any) => {
+        if (snap && snap.exists()) {
+          const matchDoc = { id: snap.id, ...snap.data() } as FirestoreMatchDoc;
+          onData(matchDoc);
+          // Synchronize in-memory engine state
+          if (this.localContainerProvider) {
+            const local = this.localContainerProvider(matchId);
+            if (local) {
+              Object.assign(local.match, matchDoc);
             }
           }
-        },
+          for (const cb of this.matchSyncCallbacks) {
+            try {
+              cb(matchId, matchDoc);
+            } catch (e) {
+              console.warn('[MatchSyncService] Match callback error:', e);
+            }
+          }
+        }
+      };
+
+      fsUnsub = onSnapshot(
+        matchRef,
+        processMatchSnap,
         (err) => {
           if (onError) onError(err);
           else console.warn('Match sync warning:', err.message);
         }
       );
+
+      // Fast active polling fallback (every 1.5s) to guarantee instantaneous state synchronization
+      pollInterval = setInterval(async () => {
+        try {
+          const snap = await getDoc(matchRef);
+          processMatchSnap(snap);
+        } catch {
+          // Ignore transient poll error
+        }
+      }, 1500);
     }
 
     return () => {
       this.matchListeners.get(matchId)?.delete(onData);
       fsUnsub();
+      if (pollInterval) clearInterval(pollInterval);
     };
   }
 
@@ -307,49 +324,64 @@ export class MatchSyncService {
 
     const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
+    let pollInterval: NodeJS.Timeout | null = null;
 
     if (db) {
       const playersRef = collection(db, 'matches', matchId, 'players');
-      fsUnsub = onSnapshot(
-        playersRef,
-        (snap) => {
-          const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
-          players.sort((a, b) => a.turnOrder - b.turnOrder);
-          console.log(`[MatchSyncService] onSnapshot synchronized ${players.length} players for match ${matchId}:`, players.map((p) => `${p.displayName} (${p.id})`));
-          onData(players);
 
-          // Synchronize in-memory container so that host and guest engines stay identical
-          for (const cb of this.playerSyncCallbacks) {
-            try {
-              cb(matchId, players);
-            } catch (e) {
-              console.warn('[MatchSyncService] Player callback error:', e);
-            }
+      const processPlayersSnap = (snap: any) => {
+        if (!snap || !snap.docs) return;
+        const players = snap.docs.map((d: any) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
+        players.sort((a: FirestorePlayerDoc, b: FirestorePlayerDoc) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+        onData(players);
+
+        // Synchronize in-memory container so that host and guest engines stay identical
+        for (const cb of this.playerSyncCallbacks) {
+          try {
+            cb(matchId, players);
+          } catch (e) {
+            console.warn('[MatchSyncService] Player callback error:', e);
           }
+        }
 
-          if (this.localContainerProvider) {
-            const local = this.localContainerProvider(matchId);
-            if (local) {
-              local.players.length = 0;
-              local.players.push(...players);
-              for (const p of players) {
-                if (!local.match.participantUserIds.includes(p.id)) {
-                  local.match.participantUserIds.push(p.id);
-                }
+        if (this.localContainerProvider) {
+          const local = this.localContainerProvider(matchId);
+          if (local) {
+            local.players.length = 0;
+            local.players.push(...players);
+            for (const p of players) {
+              if (!local.match.participantUserIds.includes(p.id)) {
+                local.match.participantUserIds.push(p.id);
               }
             }
           }
-        },
+        }
+      };
+
+      fsUnsub = onSnapshot(
+        playersRef,
+        processPlayersSnap,
         (err) => {
           if (onError) onError(err);
           else console.warn('Players sync warning:', err.message);
         }
       );
+
+      // Fast active polling fallback (every 1.5s) to guarantee instantaneous player detection
+      pollInterval = setInterval(async () => {
+        try {
+          const snap = await getDocs(playersRef);
+          processPlayersSnap(snap);
+        } catch {
+          // Ignore transient poll error
+        }
+      }, 1500);
     }
 
     return () => {
       this.playersListeners.get(matchId)?.delete(onData);
       fsUnsub();
+      if (pollInterval) clearInterval(pollInterval);
     };
   }
 

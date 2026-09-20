@@ -425,12 +425,13 @@ export class CloudFunctionsClient {
       }
       case 'joinMatch': {
         const displayName = (p.displayName as string) || currentDisplayName;
-        resultData = authoritativeServerEngine.joinMatch(
+        const pDoc = authoritativeServerEngine.joinMatch(
           data.matchId,
           data.requestId,
           currentUserId,
           displayName
         );
+        resultData = { matchId: data.matchId, player: pDoc };
         break;
       }
       case 'leaveMatch': {
@@ -634,8 +635,9 @@ export class CloudFunctionsClient {
     const resolvedMatchId =
       data.matchId ||
       (resultData as any)?.matchId ||
-      (resultData as any)?.id ||
       ((resultData as any)?.match?.id) ||
+      (typeof (resultData as any)?.id === 'string' && (resultData as any)?.id.startsWith('match_') ? (resultData as any).id : undefined) ||
+      targetMatchIdToHydrate ||
       (IS_TEST_ROOM_MODE && !data.matchId ? TEST_MATCH_ID : undefined);
 
     const container = resolvedMatchId ? authoritativeServerEngine.getMatchContainer(resolvedMatchId) : undefined;

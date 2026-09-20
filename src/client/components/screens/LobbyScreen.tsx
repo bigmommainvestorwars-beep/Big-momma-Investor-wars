@@ -452,7 +452,17 @@ export const LobbyScreen: React.FC = () => {
             <span>Leave</span>
           </button>
 
-          {isHost ? (
+          {canStartMatch ? (
+            <button
+              id="start-match-lobby-btn"
+              onClick={handleStartGame}
+              disabled={isActionPending}
+              className="w-full sm:w-2/3 py-3.5 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all active:scale-95 disabled:opacity-50 cursor-pointer border border-emerald-400/20"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              <span>Start Match ({players.length}/2 Ready - Launch)</span>
+            </button>
+          ) : isHost ? (
             <button
               id="start-match-lobby-btn"
               onClick={handleStartGame}
@@ -460,11 +470,7 @@ export const LobbyScreen: React.FC = () => {
               className="w-full sm:w-2/3 py-3.5 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border border-emerald-400/20"
             >
               <Play className="w-4 h-4 fill-current" />
-              <span>
-                {players.length < 2
-                  ? 'Waiting for Player 2 (or Fill Bot)'
-                  : `Start Match (${players.length} Players Ready)`}
-              </span>
+              <span>Waiting for Player 2 (or Fill Bot)</span>
             </button>
           ) : (
             <div
@@ -472,7 +478,7 @@ export const LobbyScreen: React.FC = () => {
               className="w-full sm:w-2/3 py-3.5 bg-slate-950 border border-cyan-800/70 text-cyan-300 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-inner"
             >
               <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
-              <span>Waiting for Host to launch match...</span>
+              <span>Waiting for 2nd Player to join...</span>
             </div>
           )}
         </div>
