@@ -1,11 +1,11 @@
 /**
  * Production Auth Context
- * Provides real-time Firebase Authentication state to the React client tree,
- * with a safe DEVELOPMENT/LOCAL TEST MODE toggle for offline/local gameplay testing.
+ * Provides real-time Firebase Authentication state to the React client tree with explicit lifecycle states,
+ * token verification, and seamless synchronization across devices.
  */
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, AuthState } from '../../types/auth';
+import React, { createContext, useContext, useEffect, useState, useRef, useCallback } from 'react';
+import { User, AuthState, AuthLifecycleStatus } from '../../types/auth';
 import { authService } from '../../services/firebase/authService';
 import { userRepository } from '../../services/firestore/userRepository';
 import { setCloudFunctionsLocalTestMode, setActiveClientUser } from '../../services/firebase/cloudFunctionsClient';
@@ -20,10 +20,12 @@ export const DEFAULT_LOCAL_TEST_USER: User = {
   lastLoginAt: Date.now(),
 };
 
-interface AuthContextValue extends AuthState {
+export interface AuthContextValue extends AuthState {
   isLocalTestMode: boolean;
   setLocalTestMode: (enabled: boolean) => void;
   switchMockUser: (displayName: string, email?: string) => void;
+  ensureAuthenticatedUser: (forceTokenRefresh?: boolean) => Promise<User>;
+  getIdToken: (forceRefresh?: boolean) => Promise<string | null>;
   signInWithGoogle: () => Promise<User>;
   signInWithGoogleRedirect: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<User>;
@@ -38,13 +40,22 @@ interface AuthContextValue extends AuthState {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Only use local test mode if Firebase is not configured; production/cloud mode must be default
   const hasFirebase = authService.isConfigured();
   const [isLocalTestMode, setIsLocalTestModeState] = useState<boolean>(!hasFirebase);
   
-  // Synchronously compute initial user state immediately on initialization
-  const resolveInitialUser = (): { user: User | null; isAuthenticated: boolean } => {
-    // 1. Try Firebase Auth currentUser directly
+  // Auth state machine
+  const [authStatus, setAuthStatus] = useState<AuthLifecycleStatus>('AUTH_INITIALIZING');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const authReadyResolverRef = useRef<(() => void) | null>(null);
+  const authReadyPromiseRef = useRef<Promise<void>>(
+    new Promise<void>((resolve) => {
+      authReadyResolverRef.current = resolve;
+    })
+  );
+
+  // Synchronously compute fallback / persisted user for instant UI rendering while Firebase initializes
+  useEffect(() => {
     try {
       const fbUser = authService.getCurrentUser();
       if (fbUser?.uid) {
@@ -62,65 +73,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ...fbUser,
           displayName: displayName || 'Investor',
         };
+        setCurrentUser(resolved);
         setActiveClientUser({ uid: resolved.uid, displayName: resolved.displayName || 'Investor' });
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('investor_wars_client_uid', resolved.uid);
-          localStorage.setItem('investor_wars_client_name', resolved.displayName || 'Investor');
-          localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolved));
-        }
-        return { user: resolved, isAuthenticated: true };
-      }
-    } catch {}
-
-    // 2. Check saved investor profile in localStorage
-    if (typeof window !== 'undefined') {
-      try {
+      } else if (typeof window !== 'undefined') {
         const saved = localStorage.getItem('investor_wars_persisted_user');
-        const storedUid = localStorage.getItem('investor_wars_client_uid');
-        const storedName = localStorage.getItem('investor_wars_client_name');
-
         if (saved) {
           const parsed = JSON.parse(saved) as User;
           if (parsed?.uid) {
-            if (storedName && storedName !== 'Investor' && storedName !== 'Elite Investor') {
-              parsed.displayName = storedName;
-            }
+            setCurrentUser(parsed);
             setActiveClientUser({ uid: parsed.uid, displayName: parsed.displayName || 'Investor' });
-            return { user: parsed, isAuthenticated: true };
           }
-        } else if (storedUid) {
-          const fallbackUser: User = {
-            uid: storedUid,
-            email: 'founder@investorwars.dev',
-            displayName: storedName || 'Investor',
-            photoURL: null,
-            emailVerified: true,
-            createdAt: Date.now(),
-            lastLoginAt: Date.now(),
-          };
-          setActiveClientUser({ uid: fallbackUser.uid, displayName: fallbackUser.displayName || 'Investor' });
-          return { user: fallbackUser, isAuthenticated: true };
         }
-      } catch {}
-    }
-
-    if (!hasFirebase) {
-      setActiveClientUser({ uid: DEFAULT_LOCAL_TEST_USER.uid, displayName: DEFAULT_LOCAL_TEST_USER.displayName || 'Investor' });
-      return { user: DEFAULT_LOCAL_TEST_USER, isAuthenticated: true };
-    }
-
-    return { user: null, isAuthenticated: false };
-  };
-
-  const initialResolved = resolveInitialUser();
-
-  const [mockUser, setMockUser] = useState<User | null>(initialResolved.user);
-  const [firebaseAuthState, setFirebaseAuthState] = useState<AuthState>({
-    isAuthenticated: initialResolved.isAuthenticated,
-    user: initialResolved.user,
-    isLoading: hasFirebase && !initialResolved.user,
-    error: null,
-  });
+      }
+    } catch {}
+  }, []);
 
   const setLocalTestMode = (enabled: boolean) => {
     setIsLocalTestModeState(enabled);
@@ -129,7 +95,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const switchMockUser = (displayName: string, email?: string) => {
     const updatedUser: User = {
-      uid: mockUser?.uid || 'local_founder_1',
+      uid: currentUser?.uid || `local_${Math.random().toString(36).substring(2, 7)}`,
       email: email || 'founder@investorwars.dev',
       displayName: displayName || 'Investor (You)',
       photoURL: null,
@@ -137,7 +103,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       createdAt: Date.now(),
       lastLoginAt: Date.now(),
     };
-    setMockUser(updatedUser);
+    setCurrentUser(updatedUser);
+    setAuthStatus('AUTHENTICATED');
     if (typeof window !== 'undefined') {
       localStorage.setItem('investor_wars_persisted_user', JSON.stringify(updatedUser));
       localStorage.setItem('investor_wars_client_uid', updatedUser.uid);
@@ -146,103 +113,158 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setActiveClientUser({ uid: updatedUser.uid, displayName: updatedUser.displayName || 'Investor' });
   };
 
+  // Firebase Auth Lifecycle Subscription
   useEffect(() => {
-    if (mockUser) {
-      setActiveClientUser({ uid: mockUser.uid, displayName: mockUser.displayName || 'Investor' });
-    }
-
     if (!authService.isConfigured()) {
-      setFirebaseAuthState({
-        isAuthenticated: false,
-        user: null,
-        isLoading: false,
-        error: null,
-      });
+      setAuthStatus('AUTH_UNAUTHENTICATED');
+      if (authReadyResolverRef.current) authReadyResolverRef.current();
       return;
     }
 
-    // Check for incoming redirect authentication from Google
+    // Check for returning Google redirect authentication
     authService.checkRedirectResult().then((redirectUser) => {
       if (redirectUser) {
-        setFirebaseAuthState({
-          isAuthenticated: true,
-          user: redirectUser,
-          isLoading: false,
-          error: null,
-        });
         const dName = redirectUser.displayName || (redirectUser.email ? redirectUser.email.split('@')[0] : 'Investor');
-        setActiveClientUser({ uid: redirectUser.uid, displayName: dName });
+        const resolvedUser: User = { ...redirectUser, displayName: dName };
+        setCurrentUser(resolvedUser);
+        setAuthStatus('AUTHENTICATED');
+        setAuthError(null);
+        setActiveClientUser({ uid: resolvedUser.uid, displayName: dName });
         if (typeof window !== 'undefined') {
-          localStorage.setItem('investor_wars_client_uid', redirectUser.uid);
+          localStorage.setItem('investor_wars_client_uid', resolvedUser.uid);
           localStorage.setItem('investor_wars_client_name', dName);
-          localStorage.setItem('investor_wars_persisted_user', JSON.stringify(redirectUser));
+          localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolvedUser));
         }
       }
     }).catch((err) => {
-      console.warn('[AuthContext] Redirect login notice:', err);
+      console.warn('[AuthContext] Redirect login note:', err);
     });
 
     const unsubscribe = authService.onAuthStateChanged(async (user) => {
-      let effectiveDisplayName = user?.displayName;
-      
-      // If Firebase Auth does not have displayName, check local storage
-      if (!effectiveDisplayName && typeof window !== 'undefined') {
-        const storedName = localStorage.getItem('investor_wars_client_name');
-        if (storedName && storedName !== 'Investor' && storedName !== 'Elite Investor') {
-          effectiveDisplayName = storedName;
-        }
-      }
-
-      // If still not found, check Firestore user profile document
-      if (!effectiveDisplayName && user?.uid) {
-        try {
-          const uDoc = await userRepository.getUser(user.uid);
-          if (uDoc?.displayName) {
-            effectiveDisplayName = uDoc.displayName;
-          }
-        } catch {}
-      }
-
-      // Fallback to email prefix or generic Investor
-      if (!effectiveDisplayName && user?.email) {
-        effectiveDisplayName = user.email.split('@')[0];
-      }
-      if (!effectiveDisplayName) {
-        effectiveDisplayName = 'Investor';
-      }
-
-      // Sync effective display name back to Firebase Auth if user is authenticated
-      if (user && effectiveDisplayName && !user.displayName) {
-        try {
-          await authService.updateCurrentUserProfile(effectiveDisplayName);
-        } catch {}
-      }
-
-      setFirebaseAuthState({
-        isAuthenticated: Boolean(user),
-        user: user ? { ...user, displayName: effectiveDisplayName } : null,
-        isLoading: false,
-        error: null,
-      });
       if (user) {
-        setActiveClientUser({ uid: user.uid, displayName: effectiveDisplayName });
+        let effectiveDisplayName = user.displayName;
+        if (!effectiveDisplayName && typeof window !== 'undefined') {
+          const storedName = localStorage.getItem('investor_wars_client_name');
+          if (storedName && storedName !== 'Investor' && storedName !== 'Elite Investor') {
+            effectiveDisplayName = storedName;
+          }
+        }
+        if (!effectiveDisplayName && user.uid) {
+          try {
+            const uDoc = await userRepository.getUser(user.uid);
+            if (uDoc?.displayName) effectiveDisplayName = uDoc.displayName;
+          } catch {}
+        }
+        if (!effectiveDisplayName && user.email) {
+          effectiveDisplayName = user.email.split('@')[0];
+        }
+        if (!effectiveDisplayName) {
+          effectiveDisplayName = 'Investor';
+        }
+
         const resolvedUser: User = { ...user, displayName: effectiveDisplayName };
+        setCurrentUser(resolvedUser);
+        setAuthStatus('AUTHENTICATED');
+        setAuthError(null);
+        setActiveClientUser({ uid: resolvedUser.uid, displayName: effectiveDisplayName });
+
         if (typeof window !== 'undefined') {
-          localStorage.setItem('investor_wars_client_uid', user.uid);
+          localStorage.setItem('investor_wars_client_uid', resolvedUser.uid);
           localStorage.setItem('investor_wars_client_name', effectiveDisplayName);
           localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolvedUser));
         }
-        setMockUser(resolvedUser);
       } else {
+        // If not logged into Firebase Auth, check if we have a persisted local session
         const storedUid = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null;
-        if (!storedUid) {
+        const storedName = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_name') : null;
+
+        if (storedUid) {
+          const guestUser: User = {
+            uid: storedUid,
+            email: `${storedUid}@investorwars.dev`,
+            displayName: storedName || 'Investor',
+            photoURL: null,
+            emailVerified: true,
+            createdAt: Date.now(),
+            lastLoginAt: Date.now(),
+          };
+          setCurrentUser(guestUser);
+          setAuthStatus('AUTHENTICATED');
+          setActiveClientUser({ uid: guestUser.uid, displayName: guestUser.displayName || 'Investor' });
+        } else {
+          setCurrentUser(null);
+          setAuthStatus('AUTH_UNAUTHENTICATED');
           setActiveClientUser(null);
-          setMockUser(null);
         }
+      }
+
+      if (authReadyResolverRef.current) {
+        authReadyResolverRef.current();
       }
     });
 
     return () => unsubscribe();
+  }, []);
+
+  /**
+   * Authoritative Readiness Guard:
+   * Guarantees that Firebase Auth is initialized and currentUser is valid
+   * before any protected multiplayer or lobby operation executes.
+   */
+  const ensureAuthenticatedUser = useCallback(async (forceTokenRefresh = false): Promise<User> => {
+    // 1. Wait for initial auth listener resolution
+    await authReadyPromiseRef.current;
+
+    // 2. Check current Firebase Auth instance
+    const fbUser = authService.getCurrentUser();
+    if (fbUser) {
+      if (forceTokenRefresh) {
+        setAuthStatus('AUTH_REAUTHENTICATING');
+        await authService.getIdToken(true);
+        setAuthStatus('AUTHENTICATED');
+      }
+      return fbUser;
+    }
+
+    // 3. If in React state, verify
+    if (currentUser) {
+      return currentUser;
+    }
+
+    // 4. If unauthenticated in Firebase, auto-authenticate anonymously for seamless lobby participation
+    setAuthStatus('AUTHENTICATING');
+    try {
+      if (authService.isConfigured()) {
+        const anonUser = await authService.signInAnonymously();
+        setCurrentUser(anonUser);
+        setAuthStatus('AUTHENTICATED');
+        return anonUser;
+      }
+    } catch (anonErr) {
+      console.warn('[AuthContext] Anonymous auth fallback note:', anonErr);
+    }
+
+    // 5. Fallback quick investor profile
+    const storedUid = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null;
+    const uid = storedUid || `investor_${Math.random().toString(36).substring(2, 8)}`;
+    const dName = typeof window !== 'undefined' ? (localStorage.getItem('investor_wars_client_name') || 'Investor') : 'Investor';
+    const fallbackUser: User = {
+      uid,
+      email: `${uid}@investorwars.dev`,
+      displayName: dName,
+      photoURL: null,
+      emailVerified: true,
+      createdAt: Date.now(),
+      lastLoginAt: Date.now(),
+    };
+    setCurrentUser(fallbackUser);
+    setAuthStatus('AUTHENTICATED');
+    setActiveClientUser({ uid: fallbackUser.uid, displayName: dName });
+    return fallbackUser;
+  }, [currentUser]);
+
+  const getIdToken = useCallback(async (forceRefresh = false): Promise<string | null> => {
+    return authService.getIdToken(forceRefresh);
   }, []);
 
   const updateDisplayName = async (newName: string): Promise<void> => {
@@ -253,142 +275,126 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem('investor_wars_client_name', trimmed);
     }
 
-    const currentUid = firebaseAuthState.user?.uid || mockUser?.uid || 'user_local';
-    setActiveClientUser({
-      uid: currentUid,
-      displayName: trimmed,
-    });
+    const currentUid = currentUser?.uid || 'user_local';
+    setActiveClientUser({ uid: currentUid, displayName: trimmed });
 
-    setFirebaseAuthState((prev) => {
-      const updatedUser = prev.user ? { ...prev.user, displayName: trimmed } : null;
-      if (updatedUser && typeof window !== 'undefined') {
-        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(updatedUser));
+    setCurrentUser((prev) => {
+      const updated = prev ? { ...prev, displayName: trimmed } : null;
+      if (updated && typeof window !== 'undefined') {
+        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(updated));
       }
-      return {
-        ...prev,
-        user: updatedUser,
-      };
-    });
-
-    setMockUser((prev) => {
-      const updatedUser = prev ? { ...prev, displayName: trimmed } : null;
-      if (updatedUser && typeof window !== 'undefined') {
-        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(updatedUser));
-      }
-      return updatedUser;
+      return updated;
     });
 
     try {
       await authService.updateCurrentUserProfile(trimmed);
-      if (firebaseAuthState.user?.uid) {
-        await userRepository.updateUserDisplayName(firebaseAuthState.user.uid, trimmed);
+      if (currentUser?.uid) {
+        await userRepository.updateUserDisplayName(currentUser.uid, trimmed);
       }
     } catch (err) {
-      console.warn('[AuthContext] Update display name notice:', err);
+      console.warn('[AuthContext] Update display name note:', err);
     }
   };
 
   const handleSignInWithGoogleRedirect = async (): Promise<void> => {
     try {
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
+      setAuthStatus('AUTHENTICATING');
+      setAuthError(null);
       await authService.signInWithGoogleRedirect();
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
+      setAuthStatus('AUTH_ERROR');
+      setAuthError(errorMsg);
       throw err;
     }
   };
 
   const handleSignInWithGoogle = async (): Promise<User> => {
     try {
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
+      setAuthStatus('AUTHENTICATING');
+      setAuthError(null);
       const user = await authService.signInWithGoogle();
-      setFirebaseAuthState({
-        isAuthenticated: true,
-        user,
-        isLoading: false,
-        error: null,
-      });
       const dName = user.displayName || (user.email ? user.email.split('@')[0] : 'Investor');
-      setActiveClientUser({ uid: user.uid, displayName: dName });
+      const resolvedUser: User = { ...user, displayName: dName };
+      setCurrentUser(resolvedUser);
+      setAuthStatus('AUTHENTICATED');
+      setActiveClientUser({ uid: resolvedUser.uid, displayName: dName });
       if (typeof window !== 'undefined') {
-        localStorage.setItem('investor_wars_client_uid', user.uid);
+        localStorage.setItem('investor_wars_client_uid', resolvedUser.uid);
         localStorage.setItem('investor_wars_client_name', dName);
-        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(user));
+        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolvedUser));
       }
-      return user;
+      return resolvedUser;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
+      setAuthStatus('AUTH_ERROR');
+      setAuthError(errorMsg);
       throw err;
     }
   };
 
   const handleSignInWithEmail = async (email: string, password: string): Promise<User> => {
     try {
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
+      setAuthStatus('AUTHENTICATING');
+      setAuthError(null);
       const user = await authService.signInWithEmail(email, password);
-      setFirebaseAuthState({
-        isAuthenticated: true,
-        user,
-        isLoading: false,
-        error: null,
-      });
       const dName = user.displayName || email.split('@')[0];
-      setActiveClientUser({ uid: user.uid, displayName: dName });
+      const resolvedUser: User = { ...user, displayName: dName };
+      setCurrentUser(resolvedUser);
+      setAuthStatus('AUTHENTICATED');
+      setActiveClientUser({ uid: resolvedUser.uid, displayName: dName });
       if (typeof window !== 'undefined') {
-        localStorage.setItem('investor_wars_client_uid', user.uid);
+        localStorage.setItem('investor_wars_client_uid', resolvedUser.uid);
         localStorage.setItem('investor_wars_client_name', dName);
-        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(user));
+        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolvedUser));
       }
-      return user;
+      return resolvedUser;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
+      setAuthStatus('AUTH_ERROR');
+      setAuthError(errorMsg);
       throw err;
     }
   };
 
   const handleSignUpWithEmail = async (email: string, password: string, displayName?: string): Promise<User> => {
     try {
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
+      setAuthStatus('AUTHENTICATING');
+      setAuthError(null);
       const user = await authService.signUpWithEmail(email, password, displayName);
-      setFirebaseAuthState({
-        isAuthenticated: true,
-        user,
-        isLoading: false,
-        error: null,
-      });
       const dName = displayName || email.split('@')[0];
-      setActiveClientUser({ uid: user.uid, displayName: dName });
+      const resolvedUser: User = { ...user, displayName: dName };
+      setCurrentUser(resolvedUser);
+      setAuthStatus('AUTHENTICATED');
+      setActiveClientUser({ uid: resolvedUser.uid, displayName: dName });
       if (typeof window !== 'undefined') {
-        localStorage.setItem('investor_wars_client_uid', user.uid);
+        localStorage.setItem('investor_wars_client_uid', resolvedUser.uid);
         localStorage.setItem('investor_wars_client_name', dName);
-        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(user));
+        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolvedUser));
       }
-      return user;
+      return resolvedUser;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
+      setAuthStatus('AUTH_ERROR');
+      setAuthError(errorMsg);
       throw err;
     }
   };
 
   const handleSignInAnonymously = async (): Promise<User> => {
     try {
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: true, error: null }));
+      setAuthStatus('AUTHENTICATING');
+      setAuthError(null);
       const user = await authService.signInAnonymously();
-      setFirebaseAuthState({
-        isAuthenticated: true,
-        user,
-        isLoading: false,
-        error: null,
-      });
-      setActiveClientUser({ uid: user.uid, displayName: 'Anonymous Investor' });
-      return user;
+      const resolvedUser: User = { ...user, displayName: 'Anonymous Investor' };
+      setCurrentUser(resolvedUser);
+      setAuthStatus('AUTHENTICATED');
+      setActiveClientUser({ uid: resolvedUser.uid, displayName: 'Anonymous Investor' });
+      return resolvedUser;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
+      setAuthStatus('AUTH_ERROR');
+      setAuthError(errorMsg);
       throw err;
     }
   };
@@ -397,6 +403,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     preset: 'phone_a' | 'phone_b' | 'custom',
     customName?: string
   ): Promise<User> => {
+    setAuthStatus('AUTHENTICATING');
     let uid = '';
     let displayName = '';
 
@@ -423,7 +430,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       displayName = customName || (preset === 'phone_a' ? 'Investor Alpha (Phone A)' : 'Investor Beta (Phone B)');
       await authService.updateCurrentUserProfile(displayName);
     } catch {
-      // If Firebase anonymous auth is disabled or offline, use our stable unique ID
+      // If Firebase anonymous auth is disabled or offline, use unique persistent ID
     }
 
     const newUser: User = {
@@ -436,7 +443,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       lastLoginAt: Date.now(),
     };
 
-    setMockUser(newUser);
+    setCurrentUser(newUser);
+    setAuthStatus('AUTHENTICATED');
     setActiveClientUser({ uid, displayName });
     if (typeof window !== 'undefined') {
       localStorage.setItem('investor_wars_client_uid', uid);
@@ -448,7 +456,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const handleSignOut = async (): Promise<void> => {
-    setMockUser(null);
+    setCurrentUser(null);
     setActiveClientUser(null);
     if (typeof window !== 'undefined') {
       localStorage.removeItem('investor_wars_persisted_user');
@@ -456,36 +464,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.removeItem('investor_wars_client_name');
     }
     try {
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: true }));
+      setAuthStatus('AUTH_INITIALIZING');
       await authService.signOut();
-      setFirebaseAuthState({
-        isAuthenticated: false,
-        user: null,
-        isLoading: false,
-        error: null,
-      });
+      setAuthStatus('AUTH_UNAUTHENTICATED');
+      setAuthError(null);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      setFirebaseAuthState((prev) => ({ ...prev, isLoading: false, error: errorMsg }));
+      setAuthStatus('AUTH_ERROR');
+      setAuthError(errorMsg);
     }
   };
 
-  // Compute effective auth state: user is authenticated if either Firebase Auth or Quick Investor Profile is present
-  const effectiveUser = firebaseAuthState.user || mockUser;
-  const effectiveAuthState: AuthState = {
-    isAuthenticated: Boolean(effectiveUser),
-    user: effectiveUser,
-    isLoading: firebaseAuthState.isLoading && !mockUser,
-    error: firebaseAuthState.error,
-  };
+  const isAuthenticated = authStatus === 'AUTHENTICATED' && Boolean(currentUser);
+  const isLoading = authStatus === 'AUTH_INITIALIZING' || authStatus === 'AUTHENTICATING';
 
   return (
     <AuthContext.Provider
       value={{
-        ...effectiveAuthState,
+        isAuthenticated,
+        status: authStatus,
+        user: currentUser,
+        isLoading,
+        error: authError,
         isLocalTestMode,
         setLocalTestMode,
         switchMockUser,
+        ensureAuthenticatedUser,
+        getIdToken,
         signInWithGoogle: handleSignInWithGoogle,
         signInWithGoogleRedirect: handleSignInWithGoogleRedirect,
         signInWithEmail: handleSignInWithEmail,

@@ -23,6 +23,7 @@ import {
   SearchX,
   LogIn,
   ArrowRight,
+  AlertTriangle,
 } from 'lucide-react';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
@@ -52,6 +53,9 @@ export const HomeScreen: React.FC = () => {
   const [isPurgingLobbies, setIsPurgingLobbies] = useState(false);
   const [joiningLobbyId, setJoiningLobbyId] = useState<string | null>(null);
   const [lobbyJoinError, setLobbyJoinError] = useState<string | null>(null);
+  const [hostingError, setHostingError] = useState<string | null>(null);
+  const [isQuickMatching, setIsQuickMatching] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
 
   const handlePurgeAllLobbies = async () => {
     setIsPurgingLobbies(true);
@@ -64,19 +68,19 @@ export const HomeScreen: React.FC = () => {
       setIsPurgingLobbies(false);
     }
   };
-  const [isQuickMatching, setIsQuickMatching] = useState(false);
-  const [codeError, setCodeError] = useState<string | null>(null);
 
   const handleQuickMatch = async () => {
     setIsQuickMatching(true);
     setCodeError(null);
+    setHostingError(null);
     setLobbyJoinError(null);
     try {
       await startQuickMatchQueue();
-      // Auto-transitions to GAMEPLAY or LOBBY once state updates
       navigate('LOBBY');
     } catch (err: any) {
       console.warn('Quick Match queue error:', err);
+      const msg = err?.message || 'Matchmaking search timed out. Please try hosting a room.';
+      setHostingError(msg);
     } finally {
       setIsQuickMatching(false);
     }
@@ -86,11 +90,12 @@ export const HomeScreen: React.FC = () => {
     e.preventDefault();
     const clean = roomCodeInput.trim().toUpperCase();
     if (!clean) {
-      setCodeError('Please enter a room access code (e.g. BM-0X9X).');
+      setCodeError('Please enter a room access code (e.g. BM-0X9X or BM-EB7I).');
       return;
     }
     setIsJoiningCode(true);
     setCodeError(null);
+    setHostingError(null);
     setLobbyJoinError(null);
     try {
       await joinByRoomCode(clean);
@@ -107,6 +112,7 @@ export const HomeScreen: React.FC = () => {
     setJoiningLobbyId(matchId);
     setLobbyJoinError(null);
     setCodeError(null);
+    setHostingError(null);
     try {
       if (accessCode) {
         await joinByRoomCode(accessCode);
@@ -124,6 +130,7 @@ export const HomeScreen: React.FC = () => {
 
   const handleHostPrivate = async () => {
     setIsHosting(true);
+    setHostingError(null);
     setCodeError(null);
     setLobbyJoinError(null);
     try {
@@ -131,6 +138,8 @@ export const HomeScreen: React.FC = () => {
       navigate('LOBBY');
     } catch (err: any) {
       console.warn('Host private match error:', err);
+      const msg = err?.message || 'Failed to create investor lobby. Please check network connection and try again.';
+      setHostingError(msg);
     } finally {
       setIsHosting(false);
     }
@@ -138,185 +147,179 @@ export const HomeScreen: React.FC = () => {
 
   return (
     <div className="absolute inset-0 bg-[#030712] text-slate-100 font-sans flex overflow-hidden">
-      {/* Left Sidebar Menu / Main Menu Panel */}
-      <div className="w-full md:w-96 bg-slate-950/95 backdrop-blur-xl md:border-r border-slate-800 flex flex-col z-10 relative">
-        <div className="p-6 border-b border-slate-800/80 flex items-center justify-between">
+      {/* Top Mobile/Desktop Notification Center & Status Header */}
+      <div className="absolute top-3 right-4 z-40 flex items-center gap-2">
+        <NotificationCenterDrawer />
+
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-900/80 border border-slate-800 text-[11px] font-mono shadow-sm">
+          {connectionStatus === 'connected' ? (
+            <>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-emerald-400 font-bold hidden sm:inline">CLOUD SYNCED</span>
+            </>
+          ) : connectionStatus === 'reconnecting' ? (
+            <>
+              <RefreshCw className="w-3 h-3 text-amber-400 animate-spin" />
+              <span className="text-amber-400 font-bold">RECONNECTING...</span>
+            </>
+          ) : (
+            <>
+              <WifiOff className="w-3 h-3 text-rose-400" />
+              <button
+                onClick={() => reconnectHandshake()}
+                className="text-rose-400 hover:text-rose-300 underline font-bold cursor-pointer"
+              >
+                OFFLINE (RETRY)
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Left Navigation / Game Entry Panel */}
+      <div className="w-full md:w-96 lg:w-[440px] bg-slate-950 border-r border-slate-800 flex flex-col h-full z-10 shrink-0">
+        {/* Brand Header */}
+        <div className="p-6 border-b border-slate-800 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center justify-center">
-              <Landmark className="w-5 h-5 text-emerald-400" />
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center text-slate-950 font-black text-xl shadow-lg shadow-emerald-900/40">
+              $
             </div>
             <div>
-              <div className="text-xs font-black tracking-widest text-emerald-400 uppercase">
-                BIG MOMMA
-              </div>
-              <div className="text-[10px] font-bold tracking-widest text-slate-500 uppercase">
-                Investors' War
-              </div>
-            </div>
-          </div>
-
-          {/* Network Resilience Badge & Notification Bell */}
-          <div className="flex items-center gap-2">
-            <NotificationCenterDrawer />
-            <div
-              onClick={() => reconnectHandshake()}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-mono border cursor-pointer select-none transition-colors"
-              style={{
-                backgroundColor: isOnline && connectionStatus === 'connected' ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.15)',
-                borderColor: isOnline && connectionStatus === 'connected' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)',
-                color: isOnline && connectionStatus === 'connected' ? '#34d399' : '#f87171',
-              }}
-              title="Click to perform network reconnection handshake"
-            >
-              {connectionStatus === 'reconnecting' ? (
-                <RefreshCw className="w-3 h-3 animate-spin" />
-              ) : isOnline && connectionStatus === 'connected' ? (
-                <Wifi className="w-3 h-3" />
-              ) : (
-                <WifiOff className="w-3 h-3" />
-              )}
-              <span className="font-bold uppercase tracking-wider">
-                {connectionStatus === 'reconnecting'
-                  ? 'Handshaking'
-                  : isOnline && connectionStatus === 'connected'
-                  ? 'Online'
-                  : 'Offline'}
-              </span>
+              <h2 className="text-lg font-black tracking-wider text-white uppercase">
+                Big Momma
+              </h2>
+              <p className="text-[10px] font-mono text-emerald-400 uppercase tracking-widest">
+                Investor Wars • Board Arena
+              </p>
             </div>
           </div>
         </div>
 
-        <div className="flex-1 p-5 space-y-2.5 overflow-y-auto">
+        {/* Action Panel */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+          {/* Active Match Banner (if session exists) */}
           {activeMatchId && (
-            <button
-              id="rejoin-active-match-btn"
-              onClick={() => navigate('GAMEPLAY')}
-              className="w-full py-3.5 px-4 rounded-xl flex items-center justify-between bg-indigo-950/40 hover:bg-indigo-900/50 text-indigo-200 border border-indigo-500/40 transition-all text-xs font-black tracking-wider uppercase text-left cursor-pointer shadow-lg shadow-indigo-950/50"
+            <div
+              id="resume-active-match-card"
+              className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/60 via-slate-900 to-slate-900 border border-emerald-500/40 space-y-3"
             >
-              <div className="flex items-center gap-2.5">
-                <div className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-ping" />
-                <span>Rejoin Active Match</span>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                  <span className="text-xs font-mono font-bold text-emerald-400 uppercase tracking-wider">
+                    Active Match in Progress
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">ID: {activeMatchId.substring(0, 10)}...</span>
               </div>
-              <span className="text-[10px] font-mono text-indigo-400">RESUME</span>
-            </button>
+              <p className="text-xs text-slate-300">
+                You have an active investor game session in memory.
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  id="resume-match-btn"
+                  onClick={() => navigate('GAMEPLAY')}
+                  className="flex-1 py-2 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-emerald-900/20"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>Resume Match</span>
+                </button>
+                <button
+                  id="view-lobby-btn"
+                  onClick={() => navigate('LOBBY')}
+                  className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs uppercase tracking-wider transition-all cursor-pointer"
+                >
+                  Lobby
+                </button>
+              </div>
+            </div>
           )}
 
-          {/* Primary Quick-Match Button */}
+          {/* Quick Match / Multiplayer Instant Play */}
           <button
-            id="quick-match-btn"
+            id="quick-matchmaking-btn"
+            disabled={isQuickMatching}
             onClick={handleQuickMatch}
-            className="w-full py-4 px-5 rounded-2xl flex items-center justify-between bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white shadow-xl shadow-emerald-950/60 transition-all text-sm font-black tracking-widest uppercase active:scale-98 cursor-pointer border border-emerald-400/30"
+            className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 active:scale-[0.98] text-white font-black text-sm tracking-wider uppercase flex items-center justify-between transition-all shadow-xl shadow-emerald-950/50 cursor-pointer disabled:opacity-60"
           >
             <div className="flex items-center gap-3">
-              <Zap className="w-5 h-5 fill-current text-yellow-300" />
+              {isQuickMatching ? (
+                <RefreshCw className="w-5 h-5 animate-spin text-white" />
+              ) : (
+                <Zap className="w-5 h-5 text-amber-300 fill-amber-300" />
+              )}
               <div className="text-left">
-                <div>Quick Match</div>
-                <div className="text-[10px] font-mono font-normal opacity-85 lowercase tracking-normal">
-                  matchmaking queue • 4 investors
+                <div>{isQuickMatching ? 'Searching Match...' : 'Quick Matchmaking'}</div>
+                <div className="text-[10px] font-mono text-emerald-200 font-normal">
+                  Instant 1v1 or 4-Player Syndicate
                 </div>
               </div>
             </div>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-black/30 border border-white/10 uppercase">
-              Queue
-            </span>
+            <ArrowRight className="w-4 h-4 text-emerald-200" />
           </button>
 
-          {/* Join with Room Code Collapsible */}
-          <div className="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-3">
-            {!showCodeInput ? (
-              <button
-                id="toggle-join-code-btn"
-                onClick={() => {
-                  setShowCodeInput(true);
-                  setCodeError(null);
-                }}
-                className="w-full py-2 px-3 rounded-xl flex items-center justify-between text-slate-300 hover:text-white transition-all text-xs font-bold tracking-wider uppercase text-left cursor-pointer"
-              >
-                <div className="flex items-center gap-2.5">
-                  <KeyRound className="w-4 h-4 text-cyan-400" />
-                  <span>Join with Match Code</span>
-                </div>
-                <span className="text-[10px] font-mono text-slate-500">ENTER</span>
-              </button>
-            ) : (
-              <form onSubmit={handleJoinWithCode} className="space-y-2.5 pt-1">
-                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 uppercase">
-                  <span>Room Access Code</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowCodeInput(false);
-                      setCodeError(null);
-                    }}
-                    className="text-slate-500 hover:text-slate-300 cursor-pointer text-[10px]"
-                  >
-                    Cancel
-                  </button>
-                </div>
+          {/* Enter Room Access Code Accordion */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden transition-all">
+            <button
+              id="toggle-code-input-btn"
+              onClick={() => {
+                setShowCodeInput(!showCodeInput);
+                setCodeError(null);
+              }}
+              className="w-full p-3.5 px-4 flex items-center justify-between text-left text-xs font-bold text-slate-300 hover:text-white uppercase tracking-wider cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5">
+                <KeyRound className="w-4 h-4 text-cyan-400" />
+                <span>Join with Room Code</span>
+              </div>
+              <span className="text-[10px] font-mono text-cyan-400">
+                {showCodeInput ? 'CLOSE' : 'ENTER'}
+              </span>
+            </button>
+
+            {showCodeInput && (
+              <form onSubmit={handleJoinWithCode} className="p-4 pt-1 space-y-3 border-t border-slate-800/60">
                 <div className="flex gap-2">
                   <input
-                    id="match-access-code-input"
+                    id="room-code-input-field"
                     type="text"
-                    placeholder="e.g. BM-0X9X"
+                    placeholder="e.g. BM-EB7I"
                     value={roomCodeInput}
-                    disabled={isJoiningCode}
                     onChange={(e) => {
                       setRoomCodeInput(e.target.value.toUpperCase());
-                      if (codeError) setCodeError(null);
+                      setCodeError(null);
                     }}
-                    maxLength={10}
-                    className={`flex-1 bg-slate-950 border ${
-                      codeError ? 'border-rose-500/80 focus:border-rose-400 text-rose-100' : 'border-slate-700 focus:border-cyan-400 text-white'
-                    } rounded-xl px-3 py-2 text-xs font-mono font-bold tracking-widest uppercase focus:outline-none placeholder:text-slate-600 transition-colors disabled:opacity-50`}
+                    maxLength={14}
+                    className="flex-1 bg-slate-950 border border-slate-700 focus:border-cyan-400 rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-slate-600 uppercase tracking-widest outline-none transition-colors"
                   />
                   <button
-                    id="submit-join-code-btn"
+                    id="submit-room-code-btn"
                     type="submit"
                     disabled={isJoiningCode || !roomCodeInput.trim()}
-                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 active:scale-95 disabled:opacity-40 text-white rounded-xl text-xs font-bold uppercase tracking-wider cursor-pointer transition-all flex items-center justify-center min-w-[90px]"
+                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 active:scale-95 text-white text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
                   >
                     {isJoiningCode ? (
-                      <RefreshCw className="w-4 h-4 animate-spin text-white" />
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                     ) : (
-                      'Join Match'
+                      <span>Join</span>
                     )}
                   </button>
                 </div>
 
-                {/* Quick test code shortcut helper */}
-                <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 px-0.5">
-                  <span>Quick fill test room:</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRoomCodeInput('BM-0X9X');
-                      setCodeError(null);
-                    }}
-                    className="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer"
-                  >
-                    BM-0X9X
-                  </button>
-                </div>
-
-                {/* Active search feedback */}
-                {isJoiningCode && (
-                  <div className="bg-cyan-950/40 border border-cyan-800/60 rounded-xl px-3 py-2 text-[11px] font-mono text-cyan-300 flex items-center gap-2 animate-pulse">
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400 shrink-0" />
-                    <span>Querying Firestore for room {roomCodeInput.trim().toUpperCase()}...</span>
-                  </div>
-                )}
-
-                {/* Visual feedback for Not Found or other errors */}
+                {/* Structured Error State Display */}
                 {codeError && (
-                  <div className="bg-rose-950/50 border border-rose-800/80 rounded-xl p-3 text-xs space-y-2">
-                    <div className="flex items-start gap-2.5">
+                  <div
+                    id="room-code-error-box"
+                    className="p-3 rounded-xl bg-rose-950/70 border border-rose-800 text-left space-y-2"
+                  >
+                    <div className="flex items-start gap-2">
                       <SearchX className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                      <div className="space-y-1">
-                        <div className="font-bold text-rose-200">
-                          {codeError.includes('full')
-                            ? 'Lobby Is Full'
-                            : codeError.includes('progress')
-                            ? 'Match In Progress'
+                      <div>
+                        <div className="text-xs font-bold text-rose-300 uppercase tracking-wider font-mono">
+                          {codeError.includes('AUTH_REQUIRED')
+                            ? 'Authentication Required'
+                            : codeError.includes('LOBBY_FULL')
+                            ? 'Lobby Full'
                             : 'Room Not Found'}
                         </div>
                         <div className="text-[11px] text-rose-300/90 font-sans leading-relaxed">
@@ -327,21 +330,10 @@ export const HomeScreen: React.FC = () => {
                     <div className="flex items-center gap-2 pt-1 border-t border-rose-900/50 text-[10px] font-mono">
                       <button
                         type="button"
-                        onClick={() => {
-                          setRoomCodeInput('BM-0X9X');
-                          setCodeError(null);
-                        }}
-                        className="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer"
-                      >
-                        Try BM-0X9X
-                      </button>
-                      <span className="text-slate-600">•</span>
-                      <button
-                        type="button"
                         onClick={handleHostPrivate}
-                        className="text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer"
+                        className="text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer font-bold"
                       >
-                        Host New Lobby
+                        Host New Room
                       </button>
                       <button
                         type="button"
@@ -357,7 +349,7 @@ export const HomeScreen: React.FC = () => {
             )}
           </div>
 
-          {/* Open Public Lobbies List (Mobile & Desktop Sidebar) */}
+          {/* Open Public Lobbies List */}
           {openMatches.length > 0 && (
             <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-3 space-y-2">
               <div className="flex items-center justify-between text-[11px] font-mono text-emerald-400 uppercase tracking-wider">
@@ -392,7 +384,7 @@ export const HomeScreen: React.FC = () => {
                           <span>{displayCode}</span>
                         </div>
                         <div className="text-[10px] font-mono text-slate-500">
-                          {pCount}/4 Players
+                          {pCount}/2 Players
                         </div>
                       </div>
                       <button
@@ -417,22 +409,53 @@ export const HomeScreen: React.FC = () => {
           )}
 
           {/* Host Private Match / Create Investor Lobby */}
-          <button
-            id="host-private-lobby-btn"
-            disabled={isHosting}
-            onClick={handleHostPrivate}
-            className="w-full py-3 px-4 rounded-xl flex items-center justify-between bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white transition-all text-xs font-bold tracking-wider uppercase text-left border border-slate-800 hover:border-slate-700 cursor-pointer disabled:opacity-50"
-          >
-            <div className="flex items-center gap-2.5">
-              {isHosting ? (
-                <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
-              ) : (
-                <PlusCircle className="w-4 h-4 text-emerald-400" />
-              )}
-              <span>{isHosting ? 'Creating Lobby...' : 'Create Investor Lobby'}</span>
-            </div>
-            <span className="text-[10px] font-mono text-emerald-400">HOST</span>
-          </button>
+          <div className="space-y-2">
+            <button
+              id="host-private-lobby-btn"
+              disabled={isHosting}
+              onClick={handleHostPrivate}
+              className="w-full py-3 px-4 rounded-xl flex items-center justify-between bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-white transition-all text-xs font-bold tracking-wider uppercase text-left border border-slate-800 hover:border-slate-700 cursor-pointer disabled:opacity-50"
+            >
+              <div className="flex items-center gap-2.5">
+                {isHosting ? (
+                  <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />
+                ) : (
+                  <PlusCircle className="w-4 h-4 text-emerald-400" />
+                )}
+                <span>{isHosting ? 'Creating Lobby...' : 'Create Investor Lobby'}</span>
+              </div>
+              <span className="text-[10px] font-mono text-emerald-400">HOST</span>
+            </button>
+
+            {hostingError && (
+              <div
+                id="hosting-error-box"
+                className="p-3 rounded-xl bg-rose-950/70 border border-rose-800 text-left space-y-1.5 font-mono text-xs"
+              >
+                <div className="flex items-center gap-2 text-rose-300 font-bold">
+                  <AlertTriangle className="w-4 h-4 text-rose-400" />
+                  <span>Host Lobby Error</span>
+                </div>
+                <div className="text-[11px] text-rose-200/90 font-sans">
+                  {hostingError}
+                </div>
+                <div className="pt-1 flex items-center gap-2">
+                  <button
+                    onClick={handleHostPrivate}
+                    className="text-[10px] text-emerald-400 hover:underline cursor-pointer font-bold"
+                  >
+                    Try Again
+                  </button>
+                  <button
+                    onClick={() => setHostingError(null)}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer ml-auto"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Solo / Bot Simulation Setup */}
           <button
@@ -447,7 +470,7 @@ export const HomeScreen: React.FC = () => {
             <span className="text-[10px] font-mono text-slate-500">SOLO</span>
           </button>
 
-          {/* Phase 5 Competitive, Social & Economy Hubs */}
+          {/* Competitive, Social & Economy Hubs */}
           <div className="pt-2 border-t border-slate-800/80 space-y-1">
             <button
               id="ranked-arena-nav-btn"
@@ -604,4 +627,3 @@ export const HomeScreen: React.FC = () => {
     </div>
   );
 };
-

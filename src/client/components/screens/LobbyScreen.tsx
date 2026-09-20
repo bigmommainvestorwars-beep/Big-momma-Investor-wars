@@ -48,7 +48,7 @@ export const LobbyScreen: React.FC = () => {
       match?.status === 'in_progress' ||
       (match?.currentPhase && match.currentPhase !== 'LOBBY')
     ) {
-      console.log('[LobbyScreen] Transitioning to GAMEPLAY for user:', user?.uid);
+      console.log('[LobbyScreen] Match started. Transitioning to GAMEPLAY for user:', user?.uid);
       navigate('GAMEPLAY');
     }
   }, [match?.status, match?.currentPhase, navigate, user?.uid]);
@@ -119,7 +119,7 @@ export const LobbyScreen: React.FC = () => {
     }
   };
 
-  // Host player (Slot 1)
+  // Authoritative Host Player (Slot 1)
   const hostPlayer = useMemo(() => {
     if (players.length > 0) {
       if (match?.hostUserId) {
@@ -128,37 +128,19 @@ export const LobbyScreen: React.FC = () => {
       }
       return players[0];
     }
-    if (isHost && user) {
-      return {
-        id: user.uid,
-        userId: user.uid,
-        displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Investor Host'),
-        isBot: false,
-        connected: true,
-      };
-    }
     return null;
-  }, [players, match?.hostUserId, isHost, user]);
+  }, [players, match?.hostUserId]);
 
-  // Guest player (Slot 2)
+  // Authoritative Guest Player (Slot 2)
   const guestPlayer = useMemo(() => {
     if (players.length > 1) {
       return players.find((p) => hostPlayer ? (p.id !== hostPlayer.id && p.userId !== hostPlayer.userId) : false) || players[1];
     }
-    if (!isHost && user) {
-      return {
-        id: user.uid,
-        userId: user.uid,
-        displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Guest Investor'),
-        isBot: false,
-        connected: true,
-      };
-    }
     return null;
-  }, [players, hostPlayer, isHost, user]);
+  }, [players, hostPlayer]);
 
   const maxPlayers = 2;
-  const playerCount = Math.max(players.length, (hostPlayer ? 1 : 0) + (guestPlayer ? 1 : 0));
+  const playerCount = players.length;
   const emptySeats = Math.max(0, maxPlayers - playerCount);
 
   return (
@@ -218,42 +200,53 @@ export const LobbyScreen: React.FC = () => {
           className="mb-6 p-3.5 rounded-2xl bg-slate-950/80 border border-emerald-500/30 text-left font-mono text-xs shadow-inner"
         >
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800/80 text-[11px]">
-            <div className="flex items-center gap-2">
+            <span className="font-bold text-emerald-400 tracking-wider flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-bold text-emerald-400 tracking-wider uppercase">
-                {isHost ? 'CLIENT A (Host)' : 'CLIENT B (Guest)'}
-              </span>
-            </div>
-            <span className="px-2 py-0.5 rounded bg-emerald-950/60 text-emerald-400 font-bold border border-emerald-800/60 text-[10px]">
-              {players.length}/2 Synced
+              DIAGNOSTIC TRACE
             </span>
+            <span className="text-slate-500 text-[10px]">AUTH & SYNC VERIFIED</span>
           </div>
-          <div className="space-y-1 text-[11px]">
-            <div className="text-amber-300 font-bold break-all">
-              {diagnosticString}
-            </div>
-            <div className="flex items-center justify-between text-slate-400 text-[10px] pt-0.5">
-              <span>Account: {user?.displayName || user?.email || user?.uid}</span>
-              <span className={players.length >= 2 ? 'text-emerald-400 font-bold' : 'text-amber-400'}>
-                {players.length >= 2 ? 'READY TO START' : 'WAITING FOR PLAYER 2 (PHONE B)'}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-slate-300">
+            <div>
+              <span className="text-slate-500">ROLE:</span>{' '}
+              <span className={isHost ? 'text-amber-400 font-bold' : 'text-cyan-400 font-bold'}>
+                {clientRole}
               </span>
+            </div>
+            <div>
+              <span className="text-slate-500">USER ID:</span>{' '}
+              <span className="text-slate-200">{user?.uid ? `${user.uid.substring(0, 10)}...` : 'anonymous'}</span>
+            </div>
+            <div>
+              <span className="text-slate-500">MATCH ID:</span>{' '}
+              <span className="text-slate-200">{match?.id ? `${match.id.substring(0, 14)}...` : 'Initializing'}</span>
+            </div>
+            <div>
+              <span className="text-slate-500">ROOM CODE:</span>{' '}
+              <span className="text-cyan-300 font-bold">{accessCode}</span>
             </div>
           </div>
         </div>
 
+        {/* Global Match Error Alert */}
         {matchError && (
-          <div className="p-3 mb-4 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs font-mono text-left">
+          <div className="mb-4 p-3 rounded-2xl bg-rose-950/80 border border-rose-800 text-rose-300 text-xs text-left font-mono">
             {matchError}
           </div>
         )}
 
-        {/* Investor Lobby Slots (2 Slots: Player 1 & Player 2) */}
+        {/* Slots Container (Exactly 2 Players Max) */}
         <div className="space-y-3 mb-6 text-left">
-          {/* Slot 1: Player 1 (Host) */}
+          <div className="flex items-center justify-between text-xs font-mono text-slate-400 uppercase tracking-wider px-1">
+            <span>Investor Roster ({players.length}/{maxPlayers})</span>
+            <span>Status</span>
+          </div>
+
+          {/* Slot 1: Host (or Waiting for Host) */}
           {hostPlayer ? (
             <div
               id="player-slot-1"
-              className="flex items-center gap-3.5 bg-slate-950/70 border border-slate-800 p-3.5 rounded-2xl transition-all"
+              className="flex items-center gap-3.5 bg-slate-950/70 border border-emerald-800/50 p-3.5 rounded-2xl transition-all"
             >
               <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0 border border-slate-700/60">
                 {hostPlayer.isBot ? (
@@ -265,8 +258,8 @@ export const LobbyScreen: React.FC = () => {
               <div className="flex-1 min-w-0">
                 <div className="font-bold text-slate-100 text-sm truncate flex items-center gap-2">
                   <span>{hostPlayer.displayName}</span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-mono uppercase">
-                    Player 1 (Host)
+                  <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono uppercase">
+                    Host (Slot 1)
                   </span>
                 </div>
                 <div className="text-[10px] uppercase tracking-wider font-mono text-slate-500 flex items-center gap-2">
@@ -291,12 +284,12 @@ export const LobbyScreen: React.FC = () => {
                 <div className="w-10 h-10 rounded-xl border border-dashed border-slate-800 flex items-center justify-center text-slate-600">
                   <UserPlus className="w-5 h-5" />
                 </div>
-                <span>Slot 1: Waiting for host...</span>
+                <span>Slot 1: Initializing host...</span>
               </div>
             </div>
           )}
 
-          {/* Slot 2: Player 2 (or Empty Waiting for Player 2) */}
+          {/* Slot 2: Guest Player 2 (or Empty Waiting for Player 2) */}
           {guestPlayer ? (
             <div
               id="player-slot-2"
@@ -351,7 +344,7 @@ export const LobbyScreen: React.FC = () => {
                 <div className="w-10 h-10 rounded-xl border border-dashed border-slate-800 flex items-center justify-center text-slate-600">
                   <UserPlus className="w-5 h-5" />
                 </div>
-                <span>Slot 2: Waiting for Player 2</span>
+                <span>Slot 2: Waiting for Player 2 (Code: {accessCode})</span>
               </div>
 
               {isHost && (
@@ -367,7 +360,7 @@ export const LobbyScreen: React.FC = () => {
             </div>
           )}
 
-          {/* Any additional players if present */}
+          {/* Additional players if 4-player format */}
           {players.slice(2).map((p, idx) => (
             <div
               key={p.id}
@@ -419,60 +412,70 @@ export const LobbyScreen: React.FC = () => {
                 disabled={isActionPending}
                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold uppercase tracking-wider text-[11px] flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
               >
-                <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                <span>Fill With Bot</span>
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Fill with AI Bots</span>
               </button>
             </div>
           ) : (
-            <div />
-          )}
-
-          {isHost && players.length > 1 && (
-            <button
-              id="reset-lobby-btn"
-              onClick={handleResetLobby}
-              disabled={isActionPending}
-              className="px-3 py-2 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-xl text-[11px] font-mono flex items-center gap-1.5 border border-slate-800 transition-all cursor-pointer disabled:opacity-50 ml-auto shrink-0"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Reset Lobby (Host Only)</span>
-            </button>
+            <div className="w-full p-3 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 flex items-center justify-between text-xs">
+              <span className="text-emerald-400 font-mono font-bold">Lobby Full & Ready</span>
+              {isHost && (
+                <button
+                  id="reset-lobby-btn"
+                  onClick={handleResetLobby}
+                  disabled={isActionPending}
+                  className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold uppercase tracking-wider text-[10px] flex items-center gap-1 transition-all cursor-pointer disabled:opacity-50"
+                  title="Remove guests and reset to single host"
+                >
+                  <RotateCcw className="w-3 h-3 text-slate-400" />
+                  <span>Reset Lobby</span>
+                </button>
+              )}
+            </div>
           )}
         </div>
 
-        {/* Launch / Start Match Actions */}
+        {/* Action Controls */}
         <div className="flex flex-col sm:flex-row items-center gap-3">
           <button
             id="leave-lobby-btn"
             onClick={handleLeaveLobby}
             disabled={isActionPending}
-            className="w-full sm:w-1/3 py-3.5 rounded-xl border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white font-bold text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2 cursor-pointer"
+            className="w-full sm:w-auto py-3.5 px-6 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
           >
             <LogOut className="w-4 h-4" />
-            <span>Leave</span>
+            <span>Leave Lobby</span>
           </button>
 
           {isHost ? (
             <button
-              id="start-match-lobby-btn"
+              id="start-match-btn"
               onClick={handleStartGame}
-              disabled={isActionPending || !canStartMatch}
-              className="w-full sm:w-2/3 py-3.5 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border border-emerald-400/20"
+              disabled={!canStartMatch || isActionPending}
+              className={`flex-1 w-full py-4 px-8 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-xl cursor-pointer ${
+                canStartMatch && !isActionPending
+                  ? 'bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 shadow-emerald-950/50 active:scale-[0.99]'
+                  : 'bg-slate-800 text-slate-500 border border-slate-700/50 cursor-not-allowed shadow-none'
+              }`}
             >
-              <Play className="w-4 h-4 fill-current" />
-              <span>
-                {players.length < 2
-                  ? 'Waiting for Player 2 (or Fill Bot)'
-                  : `Start Match (${players.length} Players Ready)`}
-              </span>
+              {isActionPending ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>STARTING MATCH...</span>
+                </>
+              ) : canStartMatch ? (
+                <>
+                  <Play className="w-4 h-4 fill-current" />
+                  <span>START MATCH NOW</span>
+                </>
+              ) : (
+                <span>WAITING FOR PLAYER 2 ({players.length}/{maxPlayers})</span>
+              )}
             </button>
           ) : (
-            <div
-              id="guest-waiting-status"
-              className="w-full sm:w-2/3 py-3.5 bg-slate-950 border border-cyan-800/70 text-cyan-300 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-inner"
-            >
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
-              <span>Waiting for Host to launch match...</span>
+            <div className="flex-1 w-full py-4 px-6 rounded-2xl bg-slate-950 border border-cyan-500/40 text-cyan-400 font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+              <span>WAITING FOR HOST TO START GAME</span>
             </div>
           )}
         </div>
@@ -480,4 +483,3 @@ export const LobbyScreen: React.FC = () => {
     </div>
   );
 };
-
