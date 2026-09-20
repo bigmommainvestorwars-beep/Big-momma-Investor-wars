@@ -89,47 +89,47 @@ service cloud.firestore {
     // Read: Open lobbies (status == 'waiting_for_players') can be discovered by all users.
     // Active or finished matches can only be read by participants and admins.
     // Matches:
-    // Read & Write: Allowed for players during lobby, matchmaking and gameplay
+    // Read & Write & Delete: Allowed for players during lobby, matchmaking and gameplay
     match /matches/{matchId} {
-      allow read, write: if true;
+      allow get, list, create, update, delete: if true;
 
       // Players subcollection:
       match /players/{playerId} {
-        allow read, write: if true;
+        allow get, list, create, update, delete: if true;
       }
 
       // Auctions subcollection:
       match /auctions/{auctionId} {
-        allow read, write: if true;
+        allow get, list, create, update, delete: if true;
 
         // Bids subcollection:
         match /bids/{bidId} {
-          allow read, write: if true;
+          allow get, list, create, update, delete: if true;
         }
       }
 
       // Market Events subcollection:
       match /marketEvents/{eventId} {
-        allow read, write: if true;
+        allow get, list, create, update, delete: if true;
       }
 
       // Modifiers subcollection:
       match /modifiers/{modifierId} {
-        allow read, write: if true;
+        allow get, list, create, update, delete: if true;
       }
 
       // Pending Choices subcollection:
       match /choices/{choiceId} {
-        allow read, write: if true;
+        allow get, list, create, update, delete: if true;
       }
 
       match /marketChoices/{choiceId} {
-        allow read, write: if true;
+        allow get, list, create, update, delete: if true;
       }
 
       // Game Event Logs subcollection:
       match /logs/{logId} {
-        allow read, write: if true;
+        allow get, list, create, update, delete: if true;
       }
 
       // Idempotency subcollection:

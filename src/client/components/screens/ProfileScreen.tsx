@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Crown,
   RotateCcw,
+  Edit2,
 } from 'lucide-react';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
@@ -31,7 +32,33 @@ import { ALL_COSMETICS } from '../../../services/cosmetics/cosmeticsCatalog';
 
 export const ProfileScreen: React.FC = () => {
   const { goBack, navigate } = useNavigation();
-  const { user, signOut } = useAuth();
+  const { user, signOut, updateDisplayName } = useAuth();
+
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState(user?.displayName || '');
+  const [isSavingName, setIsSavingName] = useState(false);
+
+  useEffect(() => {
+    if (user?.displayName) {
+      setNameInput(user.displayName);
+    }
+  }, [user?.displayName]);
+
+  const handleSaveName = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!nameInput.trim()) return;
+    setIsSavingName(true);
+    try {
+      await updateDisplayName(nameInput.trim());
+      setIsEditingName(false);
+      setActionNotice('Investor alias updated successfully!');
+      setTimeout(() => setActionNotice(null), 3000);
+    } catch (err) {
+      console.warn('Failed to update name:', err);
+    } finally {
+      setIsSavingName(false);
+    }
+  };
 
   const [equippedSkinId, setEquippedSkinId] = useState<DiceSkinId>(() =>
     DiceSkinManager.getEquippedSkin()
@@ -142,9 +169,50 @@ export const ProfileScreen: React.FC = () => {
             
             <div className="flex-1 text-center sm:text-left">
               <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2">
-                <h2 className="text-2xl font-bold text-slate-100">
-                  {user?.displayName || 'Elite Investor'}
-                </h2>
+                {isEditingName ? (
+                  <form onSubmit={handleSaveName} className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="text"
+                      value={nameInput}
+                      onChange={(e) => setNameInput(e.target.value)}
+                      placeholder="Enter investor name"
+                      className="px-3 py-1 bg-slate-950 border border-amber-500/50 rounded-xl text-slate-100 text-base font-bold focus:outline-none focus:ring-2 focus:ring-amber-400"
+                      autoFocus
+                      maxLength={24}
+                    />
+                    <button
+                      type="submit"
+                      disabled={isSavingName}
+                      className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNameInput(user?.displayName || '');
+                        setIsEditingName(false);
+                      }}
+                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <h2 className="text-2xl font-bold text-slate-100 flex items-center gap-2">
+                      <span>{user?.displayName || 'Elite Investor'}</span>
+                      <button
+                        onClick={() => setIsEditingName(true)}
+                        className="p-1 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
+                        title="Edit Investor Display Name"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                    </h2>
+                  </>
+                )}
                 <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-mono font-bold flex items-center gap-1">
                   <Crown className="w-3 h-3 text-amber-400" />
                   VIP High-Roller

@@ -9,4 +9,4 @@
 
 export const TEST_ROOM_CODE = 'BM-0X9X';
 export const TEST_MATCH_ID = 'match_test_bm_0x9x';
-export const IS_TEST_ROOM_MODE = true;
+export const IS_TEST_ROOM_MODE = false;

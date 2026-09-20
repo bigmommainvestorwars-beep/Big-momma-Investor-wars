@@ -7,6 +7,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, AuthState } from '../../types/auth';
 import { authService } from '../../services/firebase/authService';
+import { userRepository } from '../../services/firestore/userRepository';
 import { setCloudFunctionsLocalTestMode, setActiveClientUser } from '../../services/firebase/cloudFunctionsClient';
 
 export const DEFAULT_LOCAL_TEST_USER: User = {
@@ -29,6 +30,7 @@ interface AuthContextValue extends AuthState {
   signUpWithEmail: (email: string, password: string, displayName?: string) => Promise<User>;
   signInAnonymously: () => Promise<User>;
   signInWithQuickProfile: (preset: 'phone_a' | 'phone_b' | 'custom', customName?: string) => Promise<User>;
+  updateDisplayName: (newName: string) => Promise<void>;
   signOut: () => Promise<void>;
   isFirebaseConfigured: boolean;
 }
@@ -121,9 +123,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('[AuthContext] Redirect login notice:', err);
     });
 
-    const unsubscribe = authService.onAuthStateChanged((user) => {
-      const storedName = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_name') : null;
-      const effectiveDisplayName = user?.displayName || (user?.email ? user.email.split('@')[0] : storedName) || 'Investor';
+    const unsubscribe = authService.onAuthStateChanged(async (user) => {
+      let effectiveDisplayName = user?.displayName;
+      
+      // If Firebase Auth does not have displayName, check local storage
+      if (!effectiveDisplayName && typeof window !== 'undefined') {
+        const storedName = localStorage.getItem('investor_wars_client_name');
+        if (storedName && storedName !== 'Investor' && storedName !== 'Elite Investor') {
+          effectiveDisplayName = storedName;
+        }
+      }
+
+      // If still not found, check Firestore user profile document
+      if (!effectiveDisplayName && user?.uid) {
+        try {
+          const uDoc = await userRepository.getUser(user.uid);
+          if (uDoc?.displayName) {
+            effectiveDisplayName = uDoc.displayName;
+          }
+        } catch {}
+      }
+
+      // Fallback to email prefix or generic Investor
+      if (!effectiveDisplayName && user?.email) {
+        effectiveDisplayName = user.email.split('@')[0];
+      }
+      if (!effectiveDisplayName) {
+        effectiveDisplayName = 'Investor';
+      }
+
+      // Sync effective display name back to Firebase Auth if user is authenticated
+      if (user && effectiveDisplayName && !user.displayName) {
+        try {
+          await authService.updateCurrentUserProfile(effectiveDisplayName);
+        } catch {}
+      }
 
       setFirebaseAuthState({
         isAuthenticated: Boolean(user),
@@ -142,6 +176,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return () => unsubscribe();
   }, []);
+
+  const updateDisplayName = async (newName: string): Promise<void> => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('investor_wars_client_name', trimmed);
+    }
+
+    const currentUid = firebaseAuthState.user?.uid || mockUser?.uid || 'user_local';
+    setActiveClientUser({
+      uid: currentUid,
+      displayName: trimmed,
+    });
+
+    setFirebaseAuthState((prev) => ({
+      ...prev,
+      user: prev.user ? { ...prev.user, displayName: trimmed } : null,
+    }));
+
+    if (mockUser) {
+      setMockUser((prev) => (prev ? { ...prev, displayName: trimmed } : null));
+    }
+
+    try {
+      await authService.updateCurrentUserProfile(trimmed);
+      if (firebaseAuthState.user?.uid) {
+        await userRepository.updateUserDisplayName(firebaseAuthState.user.uid, trimmed);
+      }
+    } catch (err) {
+      console.warn('[AuthContext] Update display name notice:', err);
+    }
+  };
 
   const handleSignInWithGoogleRedirect = async (): Promise<void> => {
     try {
@@ -347,6 +414,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signUpWithEmail: handleSignUpWithEmail,
         signInAnonymously: handleSignInAnonymously,
         signInWithQuickProfile: handleSignInWithQuickProfile,
+        updateDisplayName,
         signOut: handleSignOut,
         isFirebaseConfigured: authService.isConfigured(),
       }}

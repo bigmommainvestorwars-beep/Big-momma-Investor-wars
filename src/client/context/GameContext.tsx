@@ -378,7 +378,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setOpenMatches([]);
       }
     );
-    return () => unsub();
+
+    // Periodic cleanup of stale lobbies (> 5 minutes inactive)
+    cloudFunctionsClient.cleanExpiredLobbiesFromFirestore(5 * 60 * 1000).catch(() => {});
+    const interval = setInterval(() => {
+      cloudFunctionsClient.cleanExpiredLobbiesFromFirestore(5 * 60 * 1000).catch(() => {});
+    }, 45000);
+
+    return () => {
+      unsub();
+      clearInterval(interval);
+    };
   }, [isAuthenticated, isAuthLoading]);
 
   // Subscribe to active match and subcollections
@@ -753,20 +763,33 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [isAuthenticated, setLocalRole]
   );
 
-  // Leave Match
+  // Leave Match / Abandon Match
   const leaveMatch = useCallback(async (): Promise<void> => {
-    if (!activeMatchId) return;
+    const matchToLeave = activeMatchId;
     setIsActionPending(true);
     try {
-      const reqId = `leave_${Date.now()}`;
-      await cloudFunctionsClient.leaveMatch(activeMatchId, reqId);
+      if (matchToLeave) {
+        const reqId = `leave_${Date.now()}`;
+        await cloudFunctionsClient.leaveMatch(matchToLeave, reqId);
+      }
+    } catch (err) {
+      console.warn('[GameContext] leaveMatch note:', err);
+    } finally {
+      // Guaranteed cleanup of local session regardless of server response
       setLocalRole('unknown');
       setActiveMatchId(null);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setMatchError(msg);
-    } finally {
+      setMatch(null);
+      setPlayers([]);
+      setLogs([]);
+      setActiveAuction(null);
+      setPendingMarketChoice(null);
+      setActiveMarketEvent(null);
+      setMatchError(null);
       setIsActionPending(false);
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('bigmomma_active_match_id');
+        sessionStorage.removeItem('investor_wars_local_role');
+      }
     }
   }, [activeMatchId, setLocalRole]);
 

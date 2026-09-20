@@ -12,9 +12,11 @@ export const PauseMenuOverlay: React.FC<{ onClose: () => void }> = ({ onClose })
 
   const handleExit = async () => {
     try {
+      onClose();
       await leaveMatch();
       navigate('HOME');
     } catch {
+      onClose();
       navigate('HOME');
     }
   };

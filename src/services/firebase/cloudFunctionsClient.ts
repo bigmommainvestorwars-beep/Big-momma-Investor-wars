@@ -259,12 +259,22 @@ export class CloudFunctionsClient {
           }
         }
 
-        resultData = authoritativeServerEngine.joinMatchByAccessCode(
-          p.accessCode as string,
-          data.requestId,
-          currentUserId,
-          (p.displayName as string) || currentDisplayName
-        );
+        if (targetMatchId && container) {
+          const pDoc = authoritativeServerEngine.joinMatch(
+            targetMatchId,
+            data.requestId,
+            currentUserId,
+            (p.displayName as string) || currentDisplayName
+          );
+          resultData = { matchId: targetMatchId, player: pDoc };
+        } else {
+          resultData = authoritativeServerEngine.joinMatchByAccessCode(
+            p.accessCode as string,
+            data.requestId,
+            currentUserId,
+            (p.displayName as string) || currentDisplayName
+          );
+        }
 
         // Required Authoritative Diagnostic Log for Client B
         console.log(`CLIENT B userId: ${currentUserId} matchId: ${targetMatchId || (resultData as any)?.matchId || TEST_MATCH_ID} roomCode: ${cleanCode || TEST_ROOM_CODE}`);
@@ -303,8 +313,36 @@ export class CloudFunctionsClient {
         break;
       }
       case 'leaveMatch': {
-        authoritativeServerEngine.leaveMatch(data.matchId, data.requestId, currentUserId);
-        resultData = { success: true };
+        const leaveRes = authoritativeServerEngine.leaveMatch(data.matchId, data.requestId, currentUserId);
+        resultData = leaveRes;
+        const db = getFirebaseFirestore();
+        if (db && data.matchId) {
+          try {
+            const playerRef = doc(db, 'matches', data.matchId, 'players', currentUserId);
+            await setDoc(
+              playerRef,
+              { status: 'left', connected: false, removed: true, lastActiveAt: Date.now() },
+              { merge: true }
+            );
+
+            if (leaveRes?.isMatchAbandoned) {
+              const matchRef = doc(db, 'matches', data.matchId);
+              await setDoc(
+                matchRef,
+                {
+                  status: 'abandoned',
+                  accessCode: '',
+                  isDeleted: true,
+                  participantUserIds: [],
+                  updatedAt: Date.now(),
+                },
+                { merge: true }
+              );
+            }
+          } catch (e) {
+            console.warn('[CloudFunctionsClient] leaveMatch Firestore sync notice:', e);
+          }
+        }
         break;
       }
       case 'addBotPlayer': {
@@ -836,6 +874,52 @@ export class CloudFunctionsClient {
       requestId: `health_${Date.now()}`,
       payload: {},
     });
+  }
+
+  /**
+   * Cleans up open lobbies in Firestore that have been inactive for more than 5 minutes
+   */
+  public async cleanExpiredLobbiesFromFirestore(maxAgeMs = 5 * 60 * 1000): Promise<number> {
+    const db = getFirebaseFirestore();
+    if (!db) return 0;
+    try {
+      const cutoff = Date.now() - maxAgeMs;
+      const matchesCol = collection(db, 'matches');
+      const q = query(matchesCol, where('status', '==', 'waiting_for_players'), limit(25));
+      const snap = await getDocs(q);
+      let cleaned = 0;
+      for (const d of snap.docs) {
+        const data = d.data();
+        const lastActive = data.updatedAt || data.createdAt || 0;
+        const participantCount = Array.isArray(data.participantUserIds) ? data.participantUserIds.length : 0;
+        if (lastActive < cutoff || participantCount === 0) {
+          await setDoc(
+            d.ref,
+            {
+              status: 'abandoned',
+              accessCode: '',
+              isDeleted: true,
+              participantUserIds: [],
+              updatedAt: Date.now(),
+            },
+            { merge: true }
+          );
+          cleaned++;
+        }
+      }
+      return cleaned;
+    } catch (err) {
+      console.warn('[CloudFunctionsClient] cleanExpiredLobbies notice:', err);
+      return 0;
+    }
+  }
+
+  /**
+   * Immediately terminates and deletes all open unstarted lobbies
+   */
+  public async deleteAllOpenLobbies(): Promise<number> {
+    authoritativeServerEngine.deleteAllOpenLobbies();
+    return this.cleanExpiredLobbiesFromFirestore(0);
   }
 }
 

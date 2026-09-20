@@ -11,6 +11,7 @@ import {
   where,
   orderBy,
   limit,
+  setDoc,
   Unsubscribe,
 } from 'firebase/firestore';
 import { getFirebaseFirestore } from './config';
@@ -500,10 +501,41 @@ export class MatchSyncService {
       fsUnsub = onSnapshot(
         lobbyQuery,
         (snap) => {
-          const remoteMatches = snap.docs
-            .map((d) => ({ id: d.id, ...d.data() } as FirestoreMatchDoc))
-            .filter((m) => !m.isPrivate);
-          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          const now = Date.now();
+          const cutoff = now - 5 * 60 * 1000; // 5-minute inactivity threshold
+          const remoteMatches: FirestoreMatchDoc[] = [];
+
+          for (const d of snap.docs) {
+            const data = { id: d.id, ...d.data() } as FirestoreMatchDoc;
+            const lastActive = data.updatedAt || data.createdAt || 0;
+            const participantCount = Array.isArray(data.participantUserIds) ? data.participantUserIds.length : 0;
+            const isStale = lastActive < cutoff || participantCount === 0;
+
+            if (isStale) {
+              // Asynchronously mark expired lobby as abandoned in Firestore
+              setDoc(
+                d.ref,
+                {
+                  status: 'abandoned',
+                  accessCode: '',
+                  isDeleted: true,
+                  participantUserIds: [],
+                  updatedAt: now,
+                },
+                { merge: true }
+              ).catch(() => {});
+            } else if (!data.isPrivate && data.status === 'waiting_for_players') {
+              remoteMatches.push(data);
+            }
+          }
+
+          const rawLocal = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          const localMatches = rawLocal.filter((m) => {
+            const lastActive = m.updatedAt || m.createdAt || 0;
+            const participantCount = Array.isArray(m.participantUserIds) ? m.participantUserIds.length : 0;
+            return !m.isPrivate && m.status === 'waiting_for_players' && lastActive >= cutoff && participantCount > 0;
+          });
+
           // Combine unique matches
           const matchMap = new Map<string, FirestoreMatchDoc>();
           for (const m of localMatches) matchMap.set(m.id, m);
@@ -512,7 +544,13 @@ export class MatchSyncService {
         },
         (err) => {
           // Gracefully default to local open matches if unauthenticated or security rules active
-          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          const rawLocal = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
+          const cutoff = Date.now() - 5 * 60 * 1000;
+          const localMatches = rawLocal.filter((m) => {
+            const lastActive = m.updatedAt || m.createdAt || 0;
+            const participantCount = Array.isArray(m.participantUserIds) ? m.participantUserIds.length : 0;
+            return !m.isPrivate && m.status === 'waiting_for_players' && lastActive >= cutoff && participantCount > 0;
+          });
           onData(localMatches);
           if (onError) onError(err);
           else console.warn('Lobby sync warning:', err.message);

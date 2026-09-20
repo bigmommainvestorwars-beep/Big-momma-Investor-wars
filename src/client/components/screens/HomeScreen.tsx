@@ -19,11 +19,13 @@ import {
   ShoppingBag,
   Shield,
   Sparkles,
+  Trash2,
 } from 'lucide-react';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
 import { useGame } from '../../context/GameContext';
 import { NotificationCenterDrawer } from '../ui/NotificationCenterDrawer';
+import { cloudFunctionsClient } from '../../../services/firebase/cloudFunctionsClient';
 
 export const HomeScreen: React.FC = () => {
   const { navigate } = useNavigation();
@@ -43,6 +45,18 @@ export const HomeScreen: React.FC = () => {
   const [showCodeInput, setShowCodeInput] = useState(false);
   const [isJoiningCode, setIsJoiningCode] = useState(false);
   const [isHosting, setIsHosting] = useState(false);
+  const [isPurgingLobbies, setIsPurgingLobbies] = useState(false);
+
+  const handlePurgeAllLobbies = async () => {
+    setIsPurgingLobbies(true);
+    try {
+      await cloudFunctionsClient.deleteAllOpenLobbies();
+    } catch (e) {
+      console.warn('Purge lobbies notice:', e);
+    } finally {
+      setIsPurgingLobbies(false);
+    }
+  };
   const [isQuickMatching, setIsQuickMatching] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
 
@@ -241,7 +255,7 @@ export const HomeScreen: React.FC = () => {
               )}
               <span>{isHosting ? 'Creating Lobby...' : 'Create Investor Lobby'}</span>
             </div>
-            <span className="text-[10px] font-mono text-emerald-400">BM-0X9X</span>
+            <span className="text-[10px] font-mono text-emerald-400">HOST</span>
           </button>
 
           {/* Solo / Bot Simulation Setup */}
@@ -326,18 +340,26 @@ export const HomeScreen: React.FC = () => {
         {/* Footer info & sign out */}
         <div className="p-4 border-t border-slate-800/80">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5 truncate">
-              <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-400 text-xs font-bold shrink-0 border border-slate-700">
-                {user?.email?.[0]?.toUpperCase() || 'U'}
+            <div
+              onClick={() => navigate('PROFILE')}
+              className="flex items-center gap-2.5 truncate cursor-pointer hover:opacity-90 group transition-all"
+              title="Click to view/edit investor profile"
+            >
+              <div className="w-8 h-8 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 text-xs font-bold shrink-0">
+                {user?.displayName?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'I'}
               </div>
               <div className="truncate">
-                <div className="text-xs text-slate-300 font-semibold truncate">{user?.displayName || user?.email}</div>
-                <div className="text-[10px] text-slate-500 font-mono">Mobile Handshake V3</div>
+                <div className="text-xs text-slate-200 font-bold truncate group-hover:text-amber-400 transition-colors">
+                  {user?.displayName || (user?.email ? user.email.split('@')[0] : 'Investor')}
+                </div>
+                <div className="text-[10px] text-slate-500 font-mono truncate">
+                  {user?.email || 'Guest Session'}
+                </div>
               </div>
             </div>
             <button
               onClick={signOut}
-              className="p-2 text-slate-500 hover:text-slate-300 shrink-0 cursor-pointer rounded-lg hover:bg-slate-900"
+              className="p-2 text-slate-500 hover:text-rose-400 shrink-0 cursor-pointer rounded-lg hover:bg-slate-900 transition-colors"
               title="Sign Out"
             >
               <LogOut className="w-4 h-4" />
@@ -368,13 +390,28 @@ export const HomeScreen: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-2 gap-4 max-w-md mx-auto text-left">
-            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80">
-              <div className="text-[10px] font-mono text-emerald-400 uppercase tracking-wider mb-1 flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5" />
-                <span>Open Public Lobbies</span>
+            <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 flex flex-col justify-between">
+              <div>
+                <div className="text-[10px] font-mono text-emerald-400 uppercase tracking-wider mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Users className="w-3.5 h-3.5" />
+                    Open Public Lobbies
+                  </span>
+                </div>
+                <div className="text-2xl font-black text-white font-mono">{openMatches.length}</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">Auto-cleans if inactive &gt;5m</div>
               </div>
-              <div className="text-2xl font-black text-white font-mono">{openMatches.length}</div>
-              <div className="text-[10px] text-slate-500 mt-1">Available for quick match</div>
+              {openMatches.length > 0 && (
+                <button
+                  onClick={handlePurgeAllLobbies}
+                  disabled={isPurgingLobbies}
+                  className="mt-3 py-1.5 px-2 rounded-lg bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-900/50 text-[10px] font-mono font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+                  title="Immediately terminate and delete all open lobbies"
+                >
+                  <Trash2 className="w-3 h-3" />
+                  <span>{isPurgingLobbies ? 'Deleting...' : 'Delete Open Lobbies'}</span>
+                </button>
+              )}
             </div>
 
             <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80">
