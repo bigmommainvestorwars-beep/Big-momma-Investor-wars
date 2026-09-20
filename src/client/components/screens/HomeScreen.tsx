@@ -44,6 +44,7 @@ export const HomeScreen: React.FC = () => {
     connectionStatus,
     isOnline,
     reconnectHandshake,
+    startOfflineSimulation,
   } = useGame();
 
   const [roomCodeInput, setRoomCodeInput] = useState('');
@@ -57,6 +58,16 @@ export const HomeScreen: React.FC = () => {
   const [quickMatchError, setQuickMatchError] = useState<string | null>(null);
   const [isQuickMatching, setIsQuickMatching] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
+
+  const handleLaunchOfflineAI = async () => {
+    try {
+      await startOfflineSimulation(3);
+      navigate('GAMEPLAY');
+    } catch (e) {
+      console.error('Offline AI start error:', e);
+      navigate('MATCH_SETUP');
+    }
+  };
 
   const handlePurgeAllLobbies = async () => {
     setIsPurgingLobbies(true);
@@ -284,6 +295,13 @@ export const HomeScreen: React.FC = () => {
                   </button>
                   <button
                     type="button"
+                    onClick={handleLaunchOfflineAI}
+                    className="text-[10px] text-cyan-400 hover:underline cursor-pointer font-bold"
+                  >
+                    Play Offline AI
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setQuickMatchError(null)}
                     className="text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer ml-auto"
                   >
@@ -370,6 +388,13 @@ export const HomeScreen: React.FC = () => {
                         className="text-emerald-400 hover:text-emerald-300 hover:underline cursor-pointer font-bold"
                       >
                         Host New Room
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleLaunchOfflineAI}
+                        className="text-cyan-400 hover:text-cyan-300 hover:underline cursor-pointer font-bold"
+                      >
+                        Play Offline AI
                       </button>
                       <button
                         type="button"
@@ -481,6 +506,13 @@ export const HomeScreen: React.FC = () => {
                     className="text-[10px] text-emerald-400 hover:underline cursor-pointer font-bold"
                   >
                     Try Again
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLaunchOfflineAI}
+                    className="text-[10px] text-cyan-400 hover:underline cursor-pointer font-bold"
+                  >
+                    Play Offline AI
                   </button>
                   <button
                     onClick={() => setHostingError(null)}

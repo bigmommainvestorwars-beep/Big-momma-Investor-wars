@@ -2,7 +2,7 @@
  * Direct Cloud Firestore Multiplayer Synchronization Engine
  * Completely bypasses in-memory bottlenecks and complex timeouts.
  * Directly reads & writes match, player, and action state to Cloud Firestore
- * so two or more physical devices/browsers sync in real time.
+ * with strict 4-second timeout guards to prevent UI hanging.
  */
 
 import {
@@ -19,7 +19,6 @@ import {
   addDoc,
 } from 'firebase/firestore';
 import { getFirebaseAuth, getFirebaseFirestore } from './config';
-import { errorHandler } from '../monitoring/errorHandler';
 import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../config/testRoomConfig';
 import { FirestoreMatchDoc, FirestorePlayerDoc } from './matchSyncService';
 
@@ -45,6 +44,8 @@ export interface ServerResponseEnvelope<T = unknown> {
   };
 }
 
+const NETWORK_TIMEOUT_MS = 4000;
+
 let activeClientUser: { uid: string; displayName: string } | null = null;
 
 export function setActiveClientUser(user: { uid: string; displayName: string } | null): void {
@@ -56,7 +57,7 @@ export function getActiveClientUser(): { uid: string; displayName: string } | nu
 }
 
 export function setCloudFunctionsLocalTestMode(enabled: boolean): void {
-  // Direct Firestore client does not require local test mode toggle
+  // Direct client
 }
 
 export function isCloudFunctionsLocalTestMode(): boolean {
@@ -65,14 +66,41 @@ export function isCloudFunctionsLocalTestMode(): boolean {
 
 export class CloudFunctionsClient {
   /**
-   * Main dispatch entry point that directly executes Firestore state mutations
+   * Main dispatch entry point that wraps every Firestore state mutation in a strict 4-second timeout
    */
   public async call<TReq, TRes>(
     functionName: string,
     data: ServerRequestEnvelope<TReq>
   ): Promise<ServerResponseEnvelope<TRes>> {
+    // If local simulation match, return instantly with zero network
+    if (data.matchId === 'local-simulation' || data.matchId?.startsWith('local-')) {
+      return {
+        success: true,
+        requestId: data.requestId,
+        serverTime: Date.now(),
+        stateVersion: 1,
+        data: { success: true } as unknown as TRes,
+      };
+    }
+
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              'Connection failed. Please check Firebase credentials or try Offline AI mode.'
+            )
+          ),
+        NETWORK_TIMEOUT_MS
+      )
+    );
+
     try {
-      const resData = await this.executeDirectFirestoreOperation<TReq, TRes>(functionName, data);
+      const resData = await Promise.race([
+        this.executeDirectFirestoreOperation<TReq, TRes>(functionName, data),
+        timeoutPromise,
+      ]);
+
       return {
         success: true,
         requestId: data.requestId,
@@ -81,15 +109,18 @@ export class CloudFunctionsClient {
         data: resData,
       };
     } catch (err: any) {
-      console.warn(`[CloudFunctionsClient] Operation ${functionName} note:`, err);
-      // Fallback response so UI promises never hang
+      console.warn(`[CloudFunctionsClient] Operation ${functionName} error/timeout:`, err);
+      const msg =
+        err?.message && err.message.includes('Connection failed')
+          ? err.message
+          : 'Connection failed. Please check Firebase credentials or try Offline AI mode.';
       return {
         success: false,
         requestId: data.requestId,
         serverTime: Date.now(),
         error: {
-          code: err?.code || 'OPERATION_ERROR',
-          message: err?.message || 'Operation error',
+          code: 'CONNECTION_FAILED',
+          message: msg,
           retryable: true,
         },
       };
@@ -189,7 +220,6 @@ export class CloudFunctionsClient {
               hostUserId: user.uid,
               createdAt: Date.now(),
             });
-            // Also index stripped code (e.g., 0X9X)
             const stripped = cleanCode.replace(/^BM-/, '');
             if (stripped !== cleanCode) {
               await setDoc(doc(db, 'room_codes', stripped), {
@@ -200,7 +230,7 @@ export class CloudFunctionsClient {
               });
             }
           } catch (err) {
-            console.warn('[CloudFunctionsClient:createMatch] Direct Firestore write note:', err);
+            console.warn('[CloudFunctionsClient:createMatch] Firestore note:', err);
           }
         }
 
@@ -219,13 +249,11 @@ export class CloudFunctionsClient {
 
         if (db) {
           try {
-            // 1. Direct room_code lookup
             const codeSnap = await getDoc(doc(db, 'room_codes', cleanCode));
             if (codeSnap.exists()) {
               targetMatchId = codeSnap.data()?.matchId;
             }
 
-            // Fallback: room code with/without prefix
             if (!targetMatchId) {
               const altCode = cleanCode.startsWith('BM-') ? cleanCode.replace('BM-', '') : `BM-${cleanCode}`;
               const altSnap = await getDoc(doc(db, 'room_codes', altCode));
@@ -234,7 +262,6 @@ export class CloudFunctionsClient {
               }
             }
 
-            // Fallback: query matches by accessCode
             if (!targetMatchId) {
               const q1 = query(collection(db, 'matches'), where('accessCode', '==', cleanCode), limit(1));
               const q1Snap = await getDocs(q1);
@@ -252,7 +279,6 @@ export class CloudFunctionsClient {
                 }
               }
 
-              // Fetch current players to determine turnOrder
               const pSnap = await getDocs(collection(db, 'matches', targetMatchId, 'players'));
               const currentPlayers = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
               const existingPlayer = currentPlayers.find((pl) => pl.id === user.uid || pl.userId === user.uid);
@@ -276,7 +302,6 @@ export class CloudFunctionsClient {
                 lastActiveAt: Date.now(),
               };
 
-              // Write guest player doc and update match participants
               await setDoc(doc(db, 'matches', targetMatchId, 'players', user.uid), guestPlayer, { merge: true });
 
               const updatedParticipants = Array.from(new Set([...(matchData?.participantUserIds || []), user.uid]));
@@ -291,11 +316,10 @@ export class CloudFunctionsClient {
               } as TRes;
             }
           } catch (err) {
-            console.warn('[CloudFunctionsClient:joinMatchByAccessCode] Direct Firestore note:', err);
+            console.warn('[CloudFunctionsClient:joinMatchByAccessCode] Firestore note:', err);
           }
         }
 
-        // Test room fallback if in test mode
         if (IS_TEST_ROOM_MODE && (cleanCode === TEST_ROOM_CODE || cleanCode.includes('0X9X'))) {
           return {
             matchId: TEST_MATCH_ID,
@@ -315,7 +339,7 @@ export class CloudFunctionsClient {
           } as TRes;
         }
 
-        throw new Error(`Room code "${cleanCode}" was not found. Please verify the code or host a new room.`);
+        throw new Error(`Room code "${cleanCode}" was not found.`);
       }
 
       case 'findOrCreateQuickMatch': {
@@ -345,7 +369,6 @@ export class CloudFunctionsClient {
         }
 
         if (matchedMatchId && db) {
-          // Join existing room
           const guestPlayer: FirestorePlayerDoc = {
             id: user.uid,
             userId: user.uid,
@@ -386,7 +409,6 @@ export class CloudFunctionsClient {
           } as TRes;
         }
 
-        // Create new open room
         const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         const hostPlayerDoc: FirestorePlayerDoc = {
           id: user.uid,
@@ -523,13 +545,11 @@ export class CloudFunctionsClient {
             const curSpace = (pSnap.data()?.currentSpaceIndex as number) || 0;
             newSpace = (curSpace + total) % 52;
 
-            // Direct update of player position
             await updateDoc(pDocRef, {
               currentSpaceIndex: newSpace,
               lastActiveAt: Date.now(),
             });
 
-            // Direct update of match roll state
             await updateDoc(doc(db, 'matches', matchId), {
               lastRoll: [d1, d2],
               lastRollPlayerId: user.uid,
@@ -537,7 +557,6 @@ export class CloudFunctionsClient {
               updatedAt: Date.now(),
             });
 
-            // Record authoritative log
             await addDoc(collection(db, 'matches', matchId, 'logs'), {
               id: `log_${Date.now()}`,
               type: 'DICE_ROLLED',

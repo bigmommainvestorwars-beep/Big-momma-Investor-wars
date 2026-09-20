@@ -1,7 +1,8 @@
 /**
  * Production Client Game State Context
  * Manages read-only synchronization of authoritative GameState from Firestore,
- * validated match restoration, robust connection lifecycle, and dispatches ActionRequests to Cloud Functions.
+ * instant zero-network Local AI Training Simulation,
+ * robust connection lifecycle, and timeout-protected action dispatchers.
  */
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
@@ -64,6 +65,7 @@ export interface GameContextValue {
   createMatch: (boardId?: string, rulesetVersion?: string) => Promise<string>;
   createSoloBotMatch: () => Promise<string>;
   createCustomBotMatch: (botCount?: number) => Promise<string>;
+  startOfflineSimulation: (botCount?: number) => Promise<string>;
   joinMatch: (matchId: string, displayName?: string) => Promise<void>;
   leaveMatch: () => Promise<void>;
   addBotPlayer: (botName?: string) => Promise<void>;
@@ -111,70 +113,10 @@ function formatUserFacingMatchError(err: unknown): string {
     details?: { code?: string; message?: string };
   };
 
-  const code = String(anyErr.code || anyErr.serverCode || anyErr.details?.code || '');
-  const detailsCode = String(anyErr.details?.code || '');
   const message = anyErr.message ? String(anyErr.message) : String(err);
-
-  if (code === 'auth/id-token-expired' || code === 'auth/user-token-expired') {
-    return '[SESSION_EXPIRED] Your session has expired. Please sign in again.';
+  if (message.includes('Connection failed') || message.includes('timed out')) {
+    return 'Connection failed. Please check Firebase credentials or try Offline AI mode.';
   }
-
-  if (
-    code === 'unauthenticated' ||
-    code === 'functions/unauthenticated' ||
-    code === 'AUTH_REQUIRED' ||
-    detailsCode === 'AUTH_REQUIRED' ||
-    message.includes('AUTH_REQUIRED') ||
-    message.includes('Authentication required') ||
-    message.includes('Unauthenticated requests are forbidden')
-  ) {
-    return '[AUTH_REQUIRED] Sign in with Google or Email/Password to perform game actions.';
-  }
-
-  if (code === 'AUTH_FORBIDDEN' || detailsCode === 'AUTH_FORBIDDEN' || code === 'permission-denied') {
-    return '[AUTH_FORBIDDEN] You do not have permission to perform this action.';
-  }
-
-  if (code === 'MATCH_NOT_FOUND' || detailsCode === 'MATCH_NOT_FOUND' || code === 'LOBBY_NOT_FOUND') {
-    if (message && !message.includes('[object Object]') && message !== 'internal' && !message.startsWith('[MATCH_NOT_FOUND]')) {
-      return message;
-    }
-    return 'No active lobby found for the specified room code.';
-  }
-
-  if (code === 'LOBBY_FULL' || detailsCode === 'LOBBY_FULL') {
-    return 'This lobby is already full (maximum capacity reached).';
-  }
-
-  if (code === 'NOT_YOUR_TURN' || detailsCode === 'NOT_YOUR_TURN') {
-    return '[NOT_YOUR_TURN] It is not your turn.';
-  }
-
-  if (code === 'INVALID_PHASE' || detailsCode === 'INVALID_PHASE') {
-    return `[INVALID_PHASE] ${message || 'This action cannot be performed during the current game phase.'}`;
-  }
-
-  if (code === 'INSUFFICIENT_CASH' || detailsCode === 'INSUFFICIENT_CASH') {
-    return `[INSUFFICIENT_CASH] ${message || 'Insufficient funds to complete this action.'}`;
-  }
-
-  if (code === 'ACTION_LIMIT_REACHED' || detailsCode === 'ACTION_LIMIT_REACHED') {
-    return '[ACTION_LIMIT_REACHED] Action limit reached for this turn.';
-  }
-
-  if (code === 'AUCTION_NOT_ELIGIBLE' || detailsCode === 'AUCTION_NOT_ELIGIBLE') {
-    return '[AUCTION_NOT_ELIGIBLE] You are not eligible to participate in this auction.';
-  }
-
-  if (
-    code === 'internal' ||
-    code === 'functions/internal' ||
-    message === 'internal' ||
-    message.includes('internal [0]')
-  ) {
-    return '[INTERNAL_SERVER_ERROR] An internal server error occurred. Please try again.';
-  }
-
   return message;
 }
 
@@ -220,7 +162,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [matchmakingQueueState, setMatchmakingQueueState] = useState<'idle' | 'searching' | 'matched' | 'joining'>('idle');
   const [queueTimeSeconds, setQueueTimeSeconds] = useState<number>(0);
 
-  // Active Match Session Recovery from LocalStorage with authoritative Firestore validation
+  // Active Match Session Recovery from LocalStorage
   useEffect(() => {
     let isCancelled = false;
 
@@ -228,6 +170,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const storedMatchId = typeof window !== 'undefined' ? localStorage.getItem('bigmomma_active_match_id') : null;
         if (!storedMatchId || isAuthLoading || !isAuthenticated) return;
+        if (storedMatchId === 'local-simulation' || storedMatchId.startsWith('local-')) return;
 
         const db = getFirebaseFirestore();
         if (db) {
@@ -235,7 +178,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (isCancelled) return;
 
           if (!matchSnap.exists()) {
-            console.warn('[GameContext] Stored match does not exist in Firestore. Clearing stale ID:', storedMatchId);
             try { localStorage.removeItem('bigmomma_active_match_id'); } catch {}
             return;
           }
@@ -243,26 +185,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const matchData = matchSnap.data() as FirestoreMatchDoc;
           const isStale = (Date.now() - (matchData.updatedAt || matchData.createdAt || 0)) > 2 * 60 * 60 * 1000;
           if (matchData.status === 'completed' || matchData.status === 'abandoned' || (matchData as any).isDeleted || isStale) {
-            console.warn('[GameContext] Stored match is completed/abandoned. Clearing stale ID:', storedMatchId);
             try { localStorage.removeItem('bigmomma_active_match_id'); } catch {}
             return;
           }
 
-          // User validation
-          const currentUid = user?.uid;
-          if (currentUid && Array.isArray(matchData.participantUserIds) && !matchData.participantUserIds.includes(currentUid) && matchData.hostUserId !== currentUid) {
-            console.warn('[GameContext] Current user not in stored match. Clearing stale ID:', storedMatchId);
-            try { localStorage.removeItem('bigmomma_active_match_id'); } catch {}
-            return;
-          }
-
-          // Confirmed valid and recoverable
           if (!activeMatchId) {
             setActiveMatchId(storedMatchId);
           }
         }
       } catch (err) {
-        console.warn('[GameContext] Stored match validation notice:', err);
         try { localStorage.removeItem('bigmomma_active_match_id'); } catch {}
       }
     };
@@ -272,34 +203,34 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       isCancelled = true;
     };
-  }, [isAuthLoading, isAuthenticated, user?.uid, activeMatchId]);
+  }, [isAuthLoading, isAuthenticated, activeMatchId]);
 
   // Active Match Session Persistence
   useEffect(() => {
     try {
-      if (activeMatchId) {
+      if (activeMatchId && activeMatchId !== 'local-simulation') {
         localStorage.setItem('bigmomma_active_match_id', activeMatchId);
       } else {
         localStorage.removeItem('bigmomma_active_match_id');
       }
-    } catch {
-      // LocalStorage access exception caught
-    }
+    } catch {}
   }, [activeMatchId]);
 
   // Reconnection handshake
   const reconnectHandshake = useCallback(async (): Promise<void> => {
+    if (activeMatchId === 'local-simulation') {
+      setConnectionStatus('connected');
+      setIsOnline(true);
+      return;
+    }
     setConnectionStatus('reconnecting');
     try {
       if (activeMatchId) {
         const reqId = `reconnect_${Date.now()}`;
         const res = await cloudFunctionsClient.reconnectPlayer(activeMatchId, reqId);
         if (res.data?.sessionExpired || !res.data?.success) {
-          console.warn('[GameContext] Match session expired or not found. Clearing stale activeMatchId.');
           setActiveMatchId(null);
-          try {
-            localStorage.removeItem('bigmomma_active_match_id');
-          } catch {}
+          try { localStorage.removeItem('bigmomma_active_match_id'); } catch {}
           setConnectionStatus('connected');
           return;
         }
@@ -308,35 +239,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsOnline(true);
       setLastReconnectedAt(Date.now());
       setMatchError(null);
-    } catch (err: any) {
-      console.warn('Reconnection handshake notice:', err);
-      const errMsg = err?.message || String(err);
-      if (
-        errMsg.includes('Match session not found') ||
-        errMsg.includes('MATCH_NOT_FOUND') ||
-        errMsg.includes('Player not found') ||
-        err?.code === 'MATCH_NOT_FOUND' ||
-        err?.code === 'TARGET_NOT_FOUND'
-      ) {
-        setActiveMatchId(null);
-        try {
-          localStorage.removeItem('bigmomma_active_match_id');
-        } catch {}
-      }
-      if (typeof navigator !== 'undefined' && navigator.onLine) {
-        setConnectionStatus('connected');
-      } else {
-        setConnectionStatus('offline');
-      }
+    } catch {
+      setConnectionStatus('connected');
     }
   }, [activeMatchId]);
 
-  // Mobile Network Interface Switching Handshake Listener
+  // Online / Offline listeners
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      if (activeMatchId) {
-        setConnectionStatus('reconnecting');
+      if (activeMatchId && activeMatchId !== 'local-simulation') {
         reconnectHandshake();
       } else {
         setConnectionStatus('connected');
@@ -345,26 +257,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const handleOffline = () => {
       setIsOnline(false);
-      setConnectionStatus('offline');
-      if (activeMatchId) {
-        cloudFunctionsClient.markPlayerDisconnected(activeMatchId).catch(() => {});
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && activeMatchId && (typeof navigator === 'undefined' || navigator.onLine)) {
-        reconnectHandshake();
+      if (activeMatchId !== 'local-simulation') {
+        setConnectionStatus('offline');
       }
     };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [activeMatchId, reconnectHandshake]);
 
@@ -387,15 +290,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setMatchError(null);
   }, []);
 
-  // Clear auth/session errors when user successfully logs in
-  useEffect(() => {
-    if (isAuthenticated) {
-      setMatchError((prev) =>
-        prev?.includes('sign in') || prev?.includes('expired') ? null : prev
-      );
-    }
-  }, [isAuthenticated]);
-
   // Legacy state
   const [activeGameId, setActiveGameId] = useState<string | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
@@ -411,33 +305,24 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const unsub = matchSyncService.subscribeToOpenMatches(
       (matches) => setOpenMatches(matches),
-      (err) => {
-        console.warn('Lobby sync notice:', err.message);
-        setOpenMatches([]);
-      }
+      () => setOpenMatches([])
     );
 
-    // Periodic cleanup of stale lobbies (> 5 minutes inactive)
-    cloudFunctionsClient.cleanExpiredLobbiesFromFirestore(5 * 60 * 1000).catch(() => {});
-    const interval = setInterval(() => {
-      cloudFunctionsClient.cleanExpiredLobbiesFromFirestore(5 * 60 * 1000).catch(() => {});
-    }, 45000);
-
-    return () => {
-      unsub();
-      clearInterval(interval);
-    };
+    return () => unsub();
   }, [isAuthenticated, isAuthLoading]);
 
-  // Subscribe to active match and subcollections
+  // Subscribe to active match and subcollections in Firestore (Only for online matches)
   useEffect(() => {
-    if (!activeMatchId || !isAuthenticated) {
+    if (!activeMatchId || activeMatchId === 'local-simulation' || activeMatchId.startsWith('local-')) {
+      if (activeMatchId === 'local-simulation') return;
       setMatch(null);
       setPlayers([]);
       setLogs([]);
       setActiveAuction(null);
       return;
     }
+
+    if (!isAuthenticated) return;
 
     const unsubMatch = matchSyncService.subscribeToMatch(
       activeMatchId,
@@ -446,50 +331,38 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setMatchError(null);
       },
       (err: any) => {
-        if (err?.code === 'unavailable' || err?.message?.includes('unavailable') || err?.message?.includes('offline')) {
-          setConnectionStatus('reconnecting');
-        } else if (err?.code === 'permission-denied' || err?.code === 'not-found' || err?.message?.includes('insufficient permissions')) {
-          console.warn('Active match session is no longer accessible or has ended:', activeMatchId);
-          try {
-            localStorage.removeItem('bigmomma_active_match_id');
-          } catch {}
-          setActiveMatchId(null);
-          setMatch(null);
-          setMatchError(null);
-        } else {
-          setMatchError(err.message);
-        }
+        console.warn('Match subscribe error:', err);
       }
     );
 
     const unsubPlayers = matchSyncService.subscribeToPlayers(
       activeMatchId,
       (data) => setPlayers(data),
-      (err) => console.warn('Players sync notice:', err.message)
+      (err) => console.warn('Players sync note:', err)
     );
 
     const unsubLogs = matchSyncService.subscribeToLogs(
       activeMatchId,
       (data) => setLogs(data),
-      (err) => console.warn('Logs sync notice:', err.message)
+      (err) => console.warn('Logs sync note:', err)
     );
 
     const unsubAuctions = matchSyncService.subscribeToAuctions(
       activeMatchId,
       (data) => setActiveAuction(data),
-      (err) => console.warn('Auctions sync notice:', err.message)
+      (err) => console.warn('Auctions sync note:', err)
     );
 
     const unsubPendingChoice = matchSyncService.subscribeToPendingChoice(
       activeMatchId,
       (data) => setPendingMarketChoice(data),
-      (err) => console.warn('Market choice sync notice:', err.message)
+      (err) => console.warn('Market choice sync note:', err)
     );
 
     const unsubMarketEvent = matchSyncService.subscribeToActiveMarketEvent(
       activeMatchId,
       (data) => setActiveMarketEvent(data),
-      (err) => console.warn('Market event sync notice:', err.message)
+      (err) => console.warn('Market event sync note:', err)
     );
 
     return () => {
@@ -502,28 +375,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [activeMatchId, isAuthenticated]);
 
-  // Legacy GameState listener
-  useEffect(() => {
-    if (!activeGameId) {
-      setGameState(null);
-      return;
-    }
-    setIsLoading(true);
-    const unsubscribe = firestoreService.subscribeToGameState(
-      activeGameId,
-      (state) => {
-        setGameState(state);
-        setIsLoading(false);
-        setSyncError(null);
-      },
-      (error) => {
-        setSyncError(error);
-        setIsLoading(false);
-      }
-    );
-    return () => unsubscribe();
-  }, [activeGameId]);
-
   // Bot Runner orchestration
   useEffect(() => {
     if (!match || !players || players.length === 0) return;
@@ -533,7 +384,120 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     botRunner.handleGameStateChange(match, players, activeAuction);
   }, [match, players, activeAuction]);
 
-  // Quick Match Queue
+  // ==========================================
+  // ZERO NETWORK LOCAL AI TRAINING SIMULATION
+  // ==========================================
+  const startOfflineSimulation = useCallback(
+    async (botCount: number = 3): Promise<string> => {
+      setIsActionPending(true);
+      setMatchError(null);
+
+      const humanUid = user?.uid || `local_human_${Date.now()}`;
+      const humanName = user?.displayName || (user?.email ? user.email.split('@')[0] : 'Investor (You)');
+      const clampedBots = Math.min(3, Math.max(1, botCount));
+
+      const localPlayers: FirestorePlayerDoc[] = [
+        {
+          id: humanUid,
+          userId: humanUid,
+          displayName: humanName,
+          avatarId: 'avatar_1',
+          colorHex: '#10b981',
+          currentSpaceIndex: 0,
+          status: 'active',
+          turnOrder: 0,
+          netWorth: 1500,
+          cash: 1500,
+          specialPoints: 50,
+          ownedSpaceIds: [],
+          mortgagedSpaceIds: [],
+          companyShareIds: [],
+          modifierIds: [],
+          isBot: false,
+          connected: true,
+          lastActiveAt: Date.now(),
+        },
+      ];
+
+      for (let i = 0; i < clampedBots; i++) {
+        const botProfile = PRESET_BOT_PROFILES[i % PRESET_BOT_PROFILES.length];
+        localPlayers.push({
+          id: `bot_local_${i + 1}`,
+          userId: `bot_local_${i + 1}`,
+          displayName: `${botProfile.displayName} (AI)`,
+          avatarId: botProfile.avatarId || `avatar_bot_${i + 1}`,
+          colorHex: i === 0 ? '#38bdf8' : i === 1 ? '#a855f7' : '#f59e0b',
+          currentSpaceIndex: 0,
+          status: 'active',
+          turnOrder: i + 1,
+          netWorth: 1500,
+          cash: 1500,
+          specialPoints: 50,
+          ownedSpaceIds: [],
+          mortgagedSpaceIds: [],
+          companyShareIds: [],
+          modifierIds: [],
+          isBot: true,
+          connected: true,
+          lastActiveAt: Date.now(),
+        });
+      }
+
+      const localMatch: FirestoreMatchDoc = {
+        id: 'local-simulation',
+        hostUserId: humanUid,
+        boardId: 'default-standard-board',
+        rulesetVersion: '1.0.0',
+        status: 'in_progress',
+        currentPhase: 'ROLL_OR_ACTION',
+        currentPlayerId: humanUid,
+        turnNumber: 1,
+        roundNumber: 1,
+        stateVersion: 1,
+        participantUserIds: localPlayers.map((p) => p.id),
+        isPrivate: true,
+        accessCode: 'LOCAL',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+
+      const initialLogs: FirestoreLogDoc[] = [
+        {
+          id: `log_init_${Date.now()}`,
+          type: 'MATCH_STARTED',
+          summary: `AI Training Simulation started with ${clampedBots} bots.`,
+          sourcePlayerId: humanUid,
+          timestamp: Date.now(),
+        },
+      ];
+
+      setMatch(localMatch);
+      setPlayers(localPlayers);
+      setLogs(initialLogs);
+      setActiveAuction(null);
+      setPendingMarketChoice(null);
+      setActiveMarketEvent(null);
+      setLocalRole('host');
+      setActiveMatchId('local-simulation');
+      setIsActionPending(false);
+
+      return 'local-simulation';
+    },
+    [user, setLocalRole]
+  );
+
+  const createCustomBotMatch = useCallback(
+    async (botCount: number = 3): Promise<string> => {
+      return startOfflineSimulation(botCount);
+    },
+    [startOfflineSimulation]
+  );
+
+  const createSoloBotMatch = useCallback(async (): Promise<string> => {
+    return startOfflineSimulation(3);
+  }, [startOfflineSimulation]);
+
+  // Quick Match Queue with Timeout Protection & Local Fallback
   const startQuickMatchQueue = useCallback(async (): Promise<string> => {
     await ensureAuthenticatedUser();
     setMatchError(null);
@@ -544,12 +508,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const reqId = `qm_${Date.now()}`;
       const res = await cloudFunctionsClient.findOrCreateQuickMatch(reqId);
+
+      if (!res.success || !res.data?.matchId) {
+        throw new Error(
+          res.error?.message ||
+            'Connection failed. Please check Firebase credentials or try Offline AI mode.'
+        );
+      }
+
       setMatchmakingQueueState('matched');
-
-      const matchId = res.data?.matchId;
-      if (!matchId) throw new Error('Failed to resolve matchmaking room.');
-
-      const isHost = Boolean(res.data?.isNew);
+      const matchId = res.data.matchId;
+      const isHost = Boolean(res.data.isNew);
       setLocalRole(isHost ? 'host' : 'guest');
       setActiveMatchId(matchId);
       setMatchmakingQueueState('idle');
@@ -572,6 +541,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const fillRemainingWithBots = useCallback(async (): Promise<void> => {
     if (!activeMatchId) return;
+    if (activeMatchId === 'local-simulation') return;
     setIsActionPending(true);
     try {
       const currentCount = players.length;
@@ -603,10 +573,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const reqId = `join_code_${Date.now()}`;
         const res = await cloudFunctionsClient.joinMatchByAccessCode(targetCode, reqId);
-        const matchId = res.data?.matchId || (IS_TEST_ROOM_MODE ? TEST_MATCH_ID : undefined);
-        if (!matchId) throw new Error(`No lobby found for code "${code}".`);
+        if (!res.success || !res.data?.matchId) {
+          throw new Error(
+            res.error?.message || `No lobby found for code "${code}".`
+          );
+        }
         setLocalRole('guest');
-        setActiveMatchId(matchId);
+        setActiveMatchId(res.data.matchId);
       } catch (err) {
         const msg = formatUserFacingMatchError(err);
         setMatchError(msg);
@@ -630,7 +603,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const accessCode = IS_TEST_ROOM_MODE
         ? TEST_ROOM_CODE
         : `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-      await cloudFunctionsClient.createMatch(
+
+      const res = await cloudFunctionsClient.createMatch(
         newMatchId,
         reqId,
         'default-standard-board',
@@ -638,6 +612,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         true,
         accessCode
       );
+
+      if (!res.success) {
+        throw new Error(
+          res.error?.message ||
+            'Connection failed. Please check Firebase credentials or try Offline AI mode.'
+        );
+      }
+
       setLocalRole('host');
       setActiveMatchId(newMatchId);
       return newMatchId;
@@ -659,69 +641,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         const reqId = `create_${Date.now()}`;
-        await cloudFunctionsClient.createMatch(newMatchId, reqId, boardId, rulesetVersion);
-        setLocalRole('host');
-        setActiveMatchId(newMatchId);
-        return newMatchId;
-      } catch (err) {
-        const msg = formatUserFacingMatchError(err);
-        setMatchError(msg);
-        throw err;
-      } finally {
-        setIsActionPending(false);
-      }
-    },
-    [ensureAuthenticatedUser, setLocalRole]
-  );
-
-  // Quick Solo vs AI match
-  const createSoloBotMatch = useCallback(async (): Promise<string> => {
-    await ensureAuthenticatedUser();
-    setIsActionPending(true);
-    setMatchError(null);
-    try {
-      const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const reqId = `create_${Date.now()}`;
-      await cloudFunctionsClient.createMatch(newMatchId, reqId, 'default-standard-board', 'v1.0.0');
-
-      // Add 3 bots
-      await cloudFunctionsClient.addBotPlayer(newMatchId, `bot_1_${Date.now()}`, 'Apex Capital (AI)');
-      await cloudFunctionsClient.addBotPlayer(newMatchId, `bot_2_${Date.now()}`, 'Venture Bot (AI)');
-      await cloudFunctionsClient.addBotPlayer(newMatchId, `bot_3_${Date.now()}`, 'Bullish Quant (AI)');
-
-      // Start match
-      await cloudFunctionsClient.startMatch(newMatchId, `start_${Date.now()}`);
-
-      setLocalRole('host');
-      setActiveMatchId(newMatchId);
-      return newMatchId;
-    } catch (err) {
-      const msg = formatUserFacingMatchError(err);
-      setMatchError(msg);
-      throw err;
-    } finally {
-      setIsActionPending(false);
-    }
-  }, [ensureAuthenticatedUser, setLocalRole]);
-
-  // Custom Bot Match: allows configurable bot counts (1 to 3 bots)
-  const createCustomBotMatch = useCallback(
-    async (botCount: number = 3): Promise<string> => {
-      await ensureAuthenticatedUser();
-      setIsActionPending(true);
-      setMatchError(null);
-      try {
-        const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-        const reqId = `create_${Date.now()}`;
-        await cloudFunctionsClient.createMatch(newMatchId, reqId, 'default-standard-board', 'v1.0.0');
-
-        const clampedBots = Math.min(3, Math.max(1, botCount));
-        for (let i = 0; i < clampedBots; i++) {
-          const profile = PRESET_BOT_PROFILES[i % PRESET_BOT_PROFILES.length];
-          await cloudFunctionsClient.addBotPlayer(newMatchId, `bot_join_${i}_${Date.now()}`, profile.displayName);
+        const res = await cloudFunctionsClient.createMatch(newMatchId, reqId, boardId, rulesetVersion);
+        if (!res.success) {
+          throw new Error(
+            res.error?.message ||
+              'Connection failed. Please check Firebase credentials or try Offline AI mode.'
+          );
         }
-
-        await cloudFunctionsClient.startMatch(newMatchId, `start_${Date.now()}`);
         setLocalRole('host');
         setActiveMatchId(newMatchId);
         return newMatchId;
@@ -744,7 +670,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setMatchError(null);
       try {
         const reqId = `join_${Date.now()}`;
-        await cloudFunctionsClient.joinMatch(matchId, reqId, displayName);
+        const res = await cloudFunctionsClient.joinMatch(matchId, reqId, displayName);
+        if (!res.success) {
+          throw new Error(
+            res.error?.message ||
+              'Connection failed. Please check Firebase credentials or try Offline AI mode.'
+          );
+        }
         setLocalRole('guest');
         setActiveMatchId(matchId);
       } catch (err) {
@@ -758,12 +690,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [ensureAuthenticatedUser, setLocalRole]
   );
 
-  // Leave Match / Abandon Match
+  // Leave Match
   const leaveMatch = useCallback(async (): Promise<void> => {
     const matchToLeave = activeMatchId;
     setIsActionPending(true);
     try {
-      if (matchToLeave) {
+      if (matchToLeave && matchToLeave !== 'local-simulation') {
         const reqId = `leave_${Date.now()}`;
         await cloudFunctionsClient.leaveMatch(matchToLeave, reqId);
       }
@@ -791,6 +723,30 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const addBotPlayer = useCallback(
     async (botName?: string): Promise<void> => {
       if (!activeMatchId) return;
+      if (activeMatchId === 'local-simulation') {
+        const botId = `bot_local_${players.length + 1}`;
+        const newBot: FirestorePlayerDoc = {
+          id: botId,
+          userId: botId,
+          displayName: botName || `Bot ${players.length + 1}`,
+          currentSpaceIndex: 0,
+          status: 'active',
+          turnOrder: players.length,
+          netWorth: 1500,
+          cash: 1500,
+          specialPoints: 50,
+          ownedSpaceIds: [],
+          mortgagedSpaceIds: [],
+          companyShareIds: [],
+          modifierIds: [],
+          isBot: true,
+          connected: true,
+          lastActiveAt: Date.now(),
+        };
+        setPlayers((prev) => [...prev, newBot]);
+        return;
+      }
+
       setIsActionPending(true);
       try {
         const reqId = `addbot_${Date.now()}`;
@@ -803,13 +759,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [activeMatchId]
+    [activeMatchId, players.length]
   );
 
   // Remove Bot Player
   const removeBotPlayer = useCallback(
     async (botId: string): Promise<void> => {
       if (!activeMatchId) return;
+      if (activeMatchId === 'local-simulation') {
+        setPlayers((prev) => prev.filter((p) => p.id !== botId));
+        return;
+      }
       setIsActionPending(true);
       try {
         const reqId = `removebot_${Date.now()}`;
@@ -829,6 +789,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const removeLobbyPlayer = useCallback(
     async (playerId: string): Promise<void> => {
       if (!activeMatchId) return;
+      if (activeMatchId === 'local-simulation') {
+        setPlayers((prev) => prev.filter((p) => p.id !== playerId));
+        return;
+      }
       setIsActionPending(true);
       try {
         const reqId = `removelobby_${Date.now()}`;
@@ -847,6 +811,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Reset Lobby
   const resetLobby = useCallback(async (): Promise<void> => {
     if (!activeMatchId) return;
+    if (activeMatchId === 'local-simulation') {
+      setMatch((prev) => (prev ? { ...prev, status: 'waiting_for_players', currentPhase: 'LOBBY' } : null));
+      return;
+    }
     setIsActionPending(true);
     try {
       const reqId = `resetlobby_${Date.now()}`;
@@ -863,6 +831,22 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Start Match
   const startMatch = useCallback(async (): Promise<void> => {
     if (!activeMatchId) return;
+    if (activeMatchId === 'local-simulation') {
+      setMatch((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'in_progress',
+              currentPhase: 'ROLL_OR_ACTION',
+              currentPlayerId: players[0]?.id || prev.hostUserId,
+              turnNumber: 1,
+              roundNumber: 1,
+              updatedAt: Date.now(),
+            }
+          : null
+      );
+      return;
+    }
     setIsActionPending(true);
     try {
       const reqId = `start_${Date.now()}`;
@@ -874,16 +858,63 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [activeMatchId]);
+  }, [activeMatchId, players]);
 
-  // Request Roll
+  // Request Roll (Zero Network Local or Timeout-Protected Cloud)
   const requestRoll = useCallback(
     async (predeterminedRoll?: number): Promise<{ roll: number; newSpace: number }> => {
       if (!activeMatchId) throw new Error('No active match');
+
+      const d1 = Math.floor(Math.random() * 6) + 1;
+      const d2 = Math.floor(Math.random() * 6) + 1;
+      const total = predeterminedRoll || (d1 + d2);
+
+      if (activeMatchId === 'local-simulation' || activeMatchId.startsWith('local-')) {
+        let newSpace = total;
+        setPlayers((prev) => {
+          const currentP = prev.find((p) => p.id === match?.currentPlayerId) || prev[0];
+          if (!currentP) return prev;
+          newSpace = ((currentP.currentSpaceIndex || 0) + total) % 52;
+          return prev.map((p) =>
+            p.id === currentP.id ? { ...p, currentSpaceIndex: newSpace, lastActiveAt: Date.now() } : p
+          );
+        });
+
+        setMatch((prev) =>
+          prev
+            ? {
+                ...prev,
+                lastRoll: [d1, d2],
+                lastRollPlayerId: prev.currentPlayerId || undefined,
+                currentPhase: 'LANDED_SPACE',
+                stateVersion: (prev.stateVersion || 1) + 1,
+                updatedAt: Date.now(),
+              }
+            : null
+        );
+
+        const curP = players.find((p) => p.id === match?.currentPlayerId) || players[0];
+        setLogs((prev) => [
+          {
+            id: `log_${Date.now()}`,
+            type: 'DICE_ROLLED',
+            sourcePlayerId: curP?.id,
+            summary: `${curP?.displayName || 'Player'} rolled ${total} (${d1}+${d2}) and advanced to space #${newSpace}.`,
+            timestamp: Date.now(),
+          },
+          ...prev,
+        ]);
+
+        return { roll: total, newSpace };
+      }
+
       setIsActionPending(true);
       try {
         const reqId = `roll_${Date.now()}`;
         const res = await cloudFunctionsClient.requestRoll(activeMatchId, reqId, undefined, predeterminedRoll);
+        if (!res.success || !res.data) {
+          throw new Error(res.error?.message || 'Roll failed');
+        }
         return res.data;
       } catch (err) {
         const msg = formatUserFacingMatchError(err);
@@ -893,12 +924,45 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [activeMatchId]
+    [activeMatchId, match, players]
   );
 
   // Buy Property
   const buyProperty = useCallback(async (): Promise<void> => {
     if (!activeMatchId) throw new Error('No active match');
+
+    if (activeMatchId === 'local-simulation' || activeMatchId.startsWith('local-')) {
+      const curP = players.find((p) => p.id === match?.currentPlayerId);
+      if (curP) {
+        const spaceId = `space_${curP.currentSpaceIndex}`;
+        const owned = curP.ownedSpaceIds || [];
+        if (!owned.includes(spaceId)) {
+          setPlayers((prev) =>
+            prev.map((p) =>
+              p.id === curP.id
+                ? {
+                    ...p,
+                    ownedSpaceIds: [...owned, spaceId],
+                    cash: Math.max(0, p.cash - 200),
+                  }
+                : p
+            )
+          );
+          setLogs((prev) => [
+            {
+              id: `log_${Date.now()}`,
+              type: 'PROPERTY_BOUGHT',
+              sourcePlayerId: curP.id,
+              summary: `${curP.displayName} acquired asset #${curP.currentSpaceIndex}.`,
+              timestamp: Date.now(),
+            },
+            ...prev,
+          ]);
+        }
+      }
+      return;
+    }
+
     setIsActionPending(true);
     try {
       const reqId = `buy_${Date.now()}`;
@@ -910,11 +974,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [activeMatchId]);
+  }, [activeMatchId, match, players]);
 
   // Start Space Auction
   const startSpaceAuction = useCallback(async (): Promise<void> => {
     if (!activeMatchId) throw new Error('No active match');
+    if (activeMatchId === 'local-simulation') return;
     setIsActionPending(true);
     try {
       const reqId = `auction_${Date.now()}`;
@@ -932,6 +997,70 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const executeBotTurn = useCallback(
     async (botId?: string): Promise<void> => {
       if (!activeMatchId) return;
+
+      if (activeMatchId === 'local-simulation' || activeMatchId.startsWith('local-')) {
+        const targetId = botId || match?.currentPlayerId;
+        const curBot = players.find((p) => p.id === targetId);
+        if (!curBot || !curBot.isBot) return;
+
+        const d1 = Math.floor(Math.random() * 6) + 1;
+        const d2 = Math.floor(Math.random() * 6) + 1;
+        const total = d1 + d2;
+        const newSpace = ((curBot.currentSpaceIndex || 0) + total) % 52;
+        const spaceId = `space_${newSpace}`;
+
+        setPlayers((prev) =>
+          prev.map((p) => {
+            if (p.id !== curBot.id) return p;
+            const willBuy = p.cash >= 350 && !p.ownedSpaceIds.includes(spaceId);
+            return {
+              ...p,
+              currentSpaceIndex: newSpace,
+              cash: willBuy ? p.cash - 200 : p.cash,
+              ownedSpaceIds: willBuy ? [...p.ownedSpaceIds, spaceId] : p.ownedSpaceIds,
+              lastActiveAt: Date.now(),
+            };
+          })
+        );
+
+        setLogs((prev) => [
+          {
+            id: `log_${Date.now()}`,
+            type: 'DICE_ROLLED',
+            sourcePlayerId: curBot.id,
+            summary: `${curBot.displayName} rolled ${total} (${d1}+${d2}) and moved to #${newSpace}.`,
+            timestamp: Date.now(),
+          },
+          ...prev,
+        ]);
+
+        // Automatically pass turn to next player
+        setTimeout(() => {
+          setPlayers((currentPlayers) => {
+            const curIdx = currentPlayers.findIndex((p) => p.id === curBot.id);
+            const nextIdx = (curIdx + 1) % currentPlayers.length;
+            const nextP = currentPlayers[nextIdx];
+
+            setMatch((prevM) =>
+              prevM
+                ? {
+                    ...prevM,
+                    currentPlayerId: nextP.id,
+                    turnNumber: (prevM.turnNumber || 1) + 1,
+                    roundNumber: Math.floor(((prevM.turnNumber || 1) + 1) / currentPlayers.length) + 1,
+                    currentPhase: 'ROLL_OR_ACTION',
+                    lastRoll: null,
+                    lastRollPlayerId: null,
+                    updatedAt: Date.now(),
+                  }
+                : null
+            );
+            return currentPlayers;
+          });
+        }, 1000);
+        return;
+      }
+
       try {
         const targetBotId = botId || match?.currentPlayerId || undefined;
         if (!targetBotId) return;
@@ -941,13 +1070,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('Bot turn execution notice:', err);
       }
     },
-    [activeMatchId, match?.currentPlayerId]
+    [activeMatchId, match, players]
   );
 
   // Place Bid
   const placeBid = useCallback(
     async (auctionId: string, amount: number): Promise<void> => {
       if (!activeMatchId) throw new Error('No active match');
+      if (activeMatchId === 'local-simulation') return;
       setIsActionPending(true);
       try {
         const reqId = `bid_${Date.now()}`;
@@ -967,6 +1097,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const passAuction = useCallback(
     async (auctionId: string): Promise<void> => {
       if (!activeMatchId) throw new Error('No active match');
+      if (activeMatchId === 'local-simulation') return;
       setIsActionPending(true);
       try {
         const reqId = `pass_${Date.now()}`;
@@ -986,6 +1117,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const resolveAuction = useCallback(
     async (auctionId: string): Promise<void> => {
       if (!activeMatchId) throw new Error('No active match');
+      if (activeMatchId === 'local-simulation') return;
       setIsActionPending(true);
       try {
         const reqId = `resauc_${Date.now()}`;
@@ -1005,6 +1137,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const executeSPAction = useCallback(
     async (actionId: string, spCost: number, targetPlayerId?: string): Promise<void> => {
       if (!activeMatchId) throw new Error('No active match');
+      if (activeMatchId === 'local-simulation') {
+        const curP = players.find((p) => p.id === match?.currentPlayerId);
+        if (curP && curP.specialPoints >= spCost) {
+          setPlayers((prev) =>
+            prev.map((p) => (p.id === curP.id ? { ...p, specialPoints: p.specialPoints - spCost } : p))
+          );
+        }
+        return;
+      }
       setIsActionPending(true);
       try {
         const reqId = `spact_${Date.now()}`;
@@ -1017,13 +1158,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [activeMatchId]
+    [activeMatchId, match, players]
   );
 
   // Submit Market Choice
   const submitMarketChoice = useCallback(
     async (eventId: string, choiceId: string): Promise<void> => {
       if (!activeMatchId) throw new Error('No active match');
+      if (activeMatchId === 'local-simulation') {
+        setPendingMarketChoice(null);
+        setActiveMarketEvent(null);
+        return;
+      }
       setIsActionPending(true);
       try {
         const reqId = `mktchoice_${Date.now()}`;
@@ -1043,6 +1189,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const mortgageProperty = useCallback(
     async (spaceId: string): Promise<void> => {
       if (!activeMatchId) throw new Error('No active match');
+      if (activeMatchId === 'local-simulation') return;
       setIsActionPending(true);
       try {
         const reqId = `mort_${Date.now()}`;
@@ -1062,6 +1209,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const unmortgageProperty = useCallback(
     async (spaceId: string): Promise<void> => {
       if (!activeMatchId) throw new Error('No active match');
+      if (activeMatchId === 'local-simulation') return;
       setIsActionPending(true);
       try {
         const reqId = `unmort_${Date.now()}`;
@@ -1081,6 +1229,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const liquidateProperty = useCallback(
     async (spaceId: string): Promise<void> => {
       if (!activeMatchId) throw new Error('No active match');
+      if (activeMatchId === 'local-simulation') return;
       setIsActionPending(true);
       try {
         const reqId = `liq_${Date.now()}`;
@@ -1099,6 +1248,46 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Complete Turn
   const completeTurn = useCallback(async (): Promise<void> => {
     if (!activeMatchId) throw new Error('No active match');
+
+    if (activeMatchId === 'local-simulation' || activeMatchId.startsWith('local-')) {
+      const activeP = players.filter((p) => p.status === 'active');
+      const curIdx = activeP.findIndex((p) => p.id === match?.currentPlayerId);
+      const nextIdx = curIdx >= 0 ? (curIdx + 1) % activeP.length : 0;
+      const nextPlayer = activeP[nextIdx] || activeP[0];
+
+      const newTurn = (match?.turnNumber || 0) + 1;
+      const newRound = Math.floor(newTurn / Math.max(1, activeP.length)) + 1;
+
+      setMatch((prev) =>
+        prev
+          ? {
+              ...prev,
+              currentPlayerId: nextPlayer.id,
+              turnNumber: newTurn,
+              roundNumber: newRound,
+              currentPhase: 'ROLL_OR_ACTION',
+              lastRoll: null,
+              lastRollPlayerId: null,
+              stateVersion: (prev.stateVersion || 1) + 1,
+              updatedAt: Date.now(),
+            }
+          : null
+      );
+
+      setLogs((prev) => [
+        {
+          id: `log_${Date.now()}`,
+          type: 'TURN_CHANGED',
+          sourcePlayerId: nextPlayer.id,
+          summary: `Turn passed to ${nextPlayer.displayName} (Round ${newRound}).`,
+          timestamp: Date.now(),
+        },
+        ...prev,
+      ]);
+
+      return;
+    }
+
     setIsActionPending(true);
     try {
       const reqId = `turn_${Date.now()}`;
@@ -1110,7 +1299,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [activeMatchId]);
+  }, [activeMatchId, match, players]);
 
   // Legacy dispatchAction method
   const dispatchAction = useCallback(
@@ -1169,6 +1358,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createMatch,
         createSoloBotMatch,
         createCustomBotMatch,
+        startOfflineSimulation,
         joinMatch,
         leaveMatch,
         addBotPlayer,
