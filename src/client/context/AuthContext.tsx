@@ -104,12 +104,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch {}
     }
 
-    if (!hasFirebase) {
-      setActiveClientUser({ uid: DEFAULT_LOCAL_TEST_USER.uid, displayName: DEFAULT_LOCAL_TEST_USER.displayName || 'Investor' });
-      return { user: DEFAULT_LOCAL_TEST_USER, isAuthenticated: true };
+    // 3. Fallback: Auto-provision a clean persistent guest investor session
+    const guestUid = `investor_${Math.random().toString(36).substring(2, 9)}`;
+    const guestUser: User = {
+      uid: guestUid,
+      email: `${guestUid}@investorwars.dev`,
+      displayName: 'Investor',
+      photoURL: null,
+      emailVerified: true,
+      createdAt: Date.now(),
+      lastLoginAt: Date.now(),
+    };
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('investor_wars_client_uid', guestUid);
+        localStorage.setItem('investor_wars_client_name', 'Investor');
+        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(guestUser));
+      } catch {}
     }
-
-    return { user: null, isAuthenticated: false };
+    setActiveClientUser({ uid: guestUid, displayName: 'Investor' });
+    return { user: guestUser, isAuthenticated: true };
   };
 
   const initialResolved = resolveInitialUser();
@@ -218,13 +232,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch {}
       }
 
-      setFirebaseAuthState({
-        isAuthenticated: Boolean(user),
-        user: user ? { ...user, displayName: effectiveDisplayName } : null,
-        isLoading: false,
-        error: null,
-      });
       if (user) {
+        setFirebaseAuthState({
+          isAuthenticated: true,
+          user: { ...user, displayName: effectiveDisplayName },
+          isLoading: false,
+          error: null,
+        });
         setActiveClientUser({ uid: user.uid, displayName: effectiveDisplayName });
         const resolvedUser: User = { ...user, displayName: effectiveDisplayName };
         if (typeof window !== 'undefined') {
@@ -234,11 +248,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         setMockUser(resolvedUser);
       } else {
-        const storedUid = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null;
-        if (!storedUid) {
-          setActiveClientUser(null);
-          setMockUser(null);
+        // Retain or restore active guest session
+        let guestUser = mockUser;
+        if (!guestUser && typeof window !== 'undefined') {
+          const saved = localStorage.getItem('investor_wars_persisted_user');
+          if (saved) {
+            try { guestUser = JSON.parse(saved); } catch {}
+          }
         }
+        if (!guestUser) {
+          const storedUid = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null;
+          const storedName = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_name') : null;
+          const fallbackUid = storedUid || `investor_${Math.random().toString(36).substring(2, 9)}`;
+          guestUser = {
+            uid: fallbackUid,
+            email: `${fallbackUid}@investorwars.dev`,
+            displayName: storedName || 'Investor',
+            photoURL: null,
+            emailVerified: true,
+            createdAt: Date.now(),
+            lastLoginAt: Date.now(),
+          };
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('investor_wars_client_uid', fallbackUid);
+            localStorage.setItem('investor_wars_client_name', guestUser.displayName || 'Investor');
+            localStorage.setItem('investor_wars_persisted_user', JSON.stringify(guestUser));
+          }
+        }
+        setActiveClientUser({ uid: guestUser.uid, displayName: guestUser.displayName || 'Investor' });
+        setMockUser(guestUser);
+        setFirebaseAuthState({
+          isAuthenticated: true,
+          user: guestUser,
+          isLoading: false,
+          error: null,
+        });
       }
     });
 

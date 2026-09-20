@@ -402,7 +402,10 @@ export class AuthoritativeServerEngine {
       activeModifiers: [],
     };
 
-    this.matches.set(matchId, container);
+    this.matches.set(targetMatchId, container);
+    if (matchId !== targetMatchId) {
+      this.matches.set(matchId, container);
+    }
     this.appendLog(container, 'MATCH_CREATED', `Match lobby created by ${hostDisplayName}.`, hostUserId);
     this.emitStateChange(container);
 

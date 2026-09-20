@@ -131,6 +131,7 @@ export const HomeScreen: React.FC = () => {
       navigate('LOBBY');
     } catch (err: any) {
       console.warn('Host private match error:', err);
+      setLobbyJoinError(err?.message || 'Failed to create lobby. Please try again.');
     } finally {
       setIsHosting(false);
     }

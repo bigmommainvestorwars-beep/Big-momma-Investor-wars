@@ -556,13 +556,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const joinByRoomCode = useCallback(
     async (code: string): Promise<void> => {
-      if (!isAuthenticated) {
-        const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to join a room.';
-        setMatchError(errorMsg);
-        const err = new Error(errorMsg);
-        (err as any).code = 'AUTH_REQUIRED';
-        throw err;
-      }
       setIsActionPending(true);
       setMatchError(null);
       try {
@@ -587,17 +580,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated, setLocalRole]
+    [setLocalRole]
   );
 
   const createPrivateMatch = useCallback(async (): Promise<string> => {
-    if (!isAuthenticated) {
-      const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to host a room.';
-      setMatchError(errorMsg);
-      const err = new Error(errorMsg);
-      (err as any).code = 'AUTH_REQUIRED';
-      throw err;
-    }
     setIsActionPending(true);
     setMatchError(null);
     try {
@@ -626,18 +612,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [isAuthenticated, setLocalRole]);
+  }, [setLocalRole]);
 
   // Create Match
   const createMatch = useCallback(
     async (boardId = 'default-standard-board', rulesetVersion = 'v1.0.0'): Promise<string> => {
-      if (!isAuthenticated) {
-        const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to start a match.';
-        setMatchError(errorMsg);
-        const err = new Error(errorMsg);
-        (err as any).code = 'AUTH_REQUIRED';
-        throw err;
-      }
       setIsActionPending(true);
       setMatchError(null);
       try {
@@ -655,18 +634,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated, setLocalRole]
+    [setLocalRole]
   );
 
   // Quick Solo vs AI match
   const createSoloBotMatch = useCallback(async (): Promise<string> => {
-    if (!isAuthenticated) {
-      const errorMsg = '[AUTH_REQUIRED] Sign in with Google or Email/Password to start a match.';
-      setMatchError(errorMsg);
-      const err = new Error(errorMsg);
-      (err as any).code = 'AUTH_REQUIRED';
-      throw err;
-    }
     setIsActionPending(true);
     setMatchError(null);
     try {

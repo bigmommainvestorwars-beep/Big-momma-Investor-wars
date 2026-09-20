@@ -780,7 +780,15 @@ export class CloudFunctionsClient {
             );
           }
 
-          await Promise.all(writePromises);
+          const syncTask = Promise.all(writePromises).catch((syncErr) => {
+            console.warn('[CloudFunctionsClient] Firestore background sync warning:', syncErr);
+          });
+
+          // Wait at most 800ms for cloud persistence so UI transitions instantly even on high-latency mobile networks
+          await Promise.race([
+            syncTask,
+            new Promise((resolve) => setTimeout(resolve, 800)),
+          ]);
         } catch (err) {
           console.warn('[CloudFunctionsClient] Firestore persistence notice:', err);
         }
