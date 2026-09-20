@@ -34,6 +34,8 @@ export interface FirestoreMatchDoc {
   accessCode?: string;
   createdAt: number;
   updatedAt: number;
+  lastRoll?: [number, number];
+  lastRollPlayerId?: string;
 }
 
 export interface FirestorePlayerDoc {

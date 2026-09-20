@@ -122,18 +122,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     const unsubscribe = authService.onAuthStateChanged((user) => {
+      const storedName = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_name') : null;
+      const effectiveDisplayName = user?.displayName || (user?.email ? user.email.split('@')[0] : storedName) || 'Investor';
+
       setFirebaseAuthState({
         isAuthenticated: Boolean(user),
-        user,
+        user: user ? { ...user, displayName: effectiveDisplayName } : null,
         isLoading: false,
         error: null,
       });
       if (user) {
-        const dName = user.displayName || (user.email ? user.email.split('@')[0] : 'Investor');
-        setActiveClientUser({ uid: user.uid, displayName: dName });
+        setActiveClientUser({ uid: user.uid, displayName: effectiveDisplayName });
         if (typeof window !== 'undefined') {
           localStorage.setItem('investor_wars_client_uid', user.uid);
-          localStorage.setItem('investor_wars_client_name', dName);
+          localStorage.setItem('investor_wars_client_name', effectiveDisplayName);
         }
       }
     });
@@ -274,6 +276,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const anonUser = await authService.signInAnonymously();
       uid = anonUser.uid;
       displayName = customName || (preset === 'phone_a' ? 'Investor Alpha (Phone A)' : 'Investor Beta (Phone B)');
+      await authService.updateCurrentUserProfile(displayName);
     } catch {
       // If Firebase anonymous auth is disabled or offline, use our stable unique ID
     }

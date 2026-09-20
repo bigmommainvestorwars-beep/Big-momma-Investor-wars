@@ -53,6 +53,7 @@ export interface IAuthService {
   signUpWithEmail(email: string, password: string, displayName?: string): Promise<User>;
   signInWithApprovedProvider(provider: ApprovedAuthProvider): Promise<User>;
   signOut(): Promise<void>;
+  updateCurrentUserProfile(displayName: string, photoURL?: string): Promise<void>;
   onAuthStateChanged(callback: (user: User | null) => void): Unsubscribe;
 }
 
@@ -327,6 +328,20 @@ class FirebaseAuthService implements IAuthService {
     } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_SIGN_OUT_FAILED', action: 'signOut' });
       throw error;
+    }
+  }
+
+  public async updateCurrentUserProfile(displayName: string, photoURL?: string): Promise<void> {
+    try {
+      const auth = getFirebaseAuth();
+      if (auth.currentUser) {
+        await updateProfile(auth.currentUser, {
+          displayName,
+          ...(photoURL ? { photoURL } : {}),
+        });
+      }
+    } catch (err) {
+      console.warn('[AuthService] Profile update notice:', err);
     }
   }
 

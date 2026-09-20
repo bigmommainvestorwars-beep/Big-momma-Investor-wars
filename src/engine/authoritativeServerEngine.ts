@@ -577,22 +577,9 @@ export class AuthoritativeServerEngine {
   ): { success: boolean; stateVersion: number; player: FirestorePlayerDoc | null; sessionExpired?: boolean } {
     let container = this.matches.get(matchId);
 
-    // If test room mode and target is test match or test code, ensure container is available
+    // If test room mode and target is test match or test code, check if container exists
     if (!container && (matchId === TEST_MATCH_ID || (IS_TEST_ROOM_MODE && (!matchId || matchId.includes('test') || matchId === 'match_test_bm_0x9x')))) {
       container = this.matches.get(TEST_MATCH_ID);
-      if (!container) {
-        this.createMatch(
-          TEST_MATCH_ID,
-          requestId,
-          'default-standard-board',
-          'v1.0.0',
-          userId,
-          displayName || 'Investor',
-          true,
-          TEST_ROOM_CODE
-        );
-        container = this.matches.get(TEST_MATCH_ID);
-      }
     }
 
     if (!container) {
@@ -731,22 +718,11 @@ export class AuthoritativeServerEngine {
       if (container) {
         const player = this.joinMatch(TEST_MATCH_ID, requestId, userId, displayName);
         return { matchId: TEST_MATCH_ID, player };
-      } else {
-        // Concurrency fallback for test room: create test lobby
-        this.createMatch(
-          TEST_MATCH_ID,
-          requestId,
-          'default-standard-board',
-          '1.0.0',
-          userId,
-          displayName,
-          true,
-          TEST_ROOM_CODE
-        );
-        const newContainer = this.matches.get(TEST_MATCH_ID)!;
-        const player = newContainer.players.get(userId)!;
-        return { matchId: TEST_MATCH_ID, player };
       }
+      throw new ServerFunctionError(
+        SERVER_ERROR_CODES.MATCH_NOT_FOUND,
+        'Lobby not found. Host must create the match first.'
+      );
     }
 
     for (const [id, container] of this.matches.entries()) {
@@ -798,7 +774,7 @@ export class AuthoritativeServerEngine {
     });
 
     const firstPlayer = sortedPlayers[0];
-    container.match.status = 'active';
+    container.match.status = 'in_progress';
     container.match.currentPhase = 'TURN_START';
     container.match.currentPlayerId = firstPlayer?.id || null;
     container.match.turnNumber = 1;
@@ -841,10 +817,19 @@ export class AuthoritativeServerEngine {
     }
 
     // Roll: use client predetermined roll if valid 2-12, otherwise generate random 2-12 (sum of two D6)
-    const roll =
-      typeof predeterminedRoll === 'number' && predeterminedRoll >= 2 && predeterminedRoll <= 12
-        ? Math.floor(predeterminedRoll)
-        : (Math.floor(Math.random() * 6) + 1) + (Math.floor(Math.random() * 6) + 1);
+    let d1: number;
+    let d2: number;
+    if (typeof predeterminedRoll === 'number' && predeterminedRoll >= 2 && predeterminedRoll <= 12) {
+      const targetSum = Math.floor(predeterminedRoll);
+      d1 = Math.min(6, Math.max(1, Math.floor(targetSum / 2)));
+      d2 = targetSum - d1;
+    } else {
+      d1 = Math.floor(Math.random() * 6) + 1;
+      d2 = Math.floor(Math.random() * 6) + 1;
+    }
+    const roll = d1 + d2;
+    match.lastRoll = [d1, d2];
+    match.lastRollPlayerId = player.id;
     const totalSpaces = DEFAULT_STANDARD_SPACES.length;
     const oldSpace = player.currentSpaceIndex;
     const passedGo = oldSpace + roll >= totalSpaces;
@@ -1592,6 +1577,8 @@ export class AuthoritativeServerEngine {
 
     match.roundNumber = nextRound;
     match.currentPhase = 'TURN_START';
+    match.lastRoll = undefined;
+    match.lastRollPlayerId = undefined;
 
     const newVersion = this.incrementVersion(match);
     this.appendLog(

@@ -124,19 +124,34 @@ export const AuthScreen: React.FC = () => {
         try {
           await signInWithEmail(cleanEmail, password);
         } catch (signErr: any) {
-          // If using sample test credentials and account doesn't exist yet, auto-provision smoothly
+          // If account doesn't exist yet, auto-register smoothly so the user isn't blocked
           if (
-            (signErr?.code === 'auth/user-not-found' || signErr?.code === 'auth/invalid-credential') &&
-            cleanEmail.endsWith('@investorwars.dev')
+            signErr?.code === 'auth/user-not-found' ||
+            signErr?.code === 'auth/invalid-credential' ||
+            signErr?.message?.includes('No account found')
           ) {
-            const fallbackName = cleanEmail.includes('phone_a') ? 'Investor Alpha (Phone A)' : 'Investor Beta (Phone B)';
-            await signUpWithEmail(cleanEmail, password, customName || fallbackName);
-          } else {
-            throw signErr;
+            try {
+              const fallbackName = customName.trim() || cleanEmail.split('@')[0];
+              await signUpWithEmail(cleanEmail, password, fallbackName);
+              return;
+            } catch (createErr: any) {
+              // If create fails (e.g. account actually existed and password was truly incorrect), throw signErr
+              throw signErr;
+            }
           }
+          throw signErr;
         }
       } else {
-        await signUpWithEmail(cleanEmail, password, customName.trim() || undefined);
+        try {
+          await signUpWithEmail(cleanEmail, password, customName.trim() || undefined);
+        } catch (upErr: any) {
+          if (upErr?.code === 'auth/email-already-in-use' || upErr?.message?.includes('already exists')) {
+            // If already registered, attempt seamless sign in
+            await signInWithEmail(cleanEmail, password);
+            return;
+          }
+          throw upErr;
+        }
       }
     } catch (err: any) {
       setErrorMessage(err?.message || 'Authentication failed. Please check your credentials.');
@@ -208,21 +223,25 @@ export const AuthScreen: React.FC = () => {
                     {copiedDomain ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedDomain ? 'Copied' : 'Copy'}</span>
                   </button>
+                  <a
+                    href="https://console.firebase.google.com/project/bigmomma-investor-wars/authentication/settings"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-lg flex items-center gap-1 text-[11px] font-bold shrink-0 transition-colors"
+                  >
+                    <span>Console ↗</span>
+                  </a>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between pt-1">
-                <span className="text-[11px] text-emerald-300 font-medium">Or play immediately without OAuth:</span>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 pt-1 border-t border-amber-500/20">
+                <span className="text-[11px] text-emerald-300 font-medium">Or play immediately without OAuth delay:</span>
                 <button
                   type="button"
-                  onClick={() => {
-                    setActiveTab('quick');
-                    setErrorMessage(null);
-                    setDomainWarning(null);
-                  }}
-                  className="text-xs text-white font-bold bg-emerald-600/80 hover:bg-emerald-500 px-3 py-1 rounded-lg transition-colors"
+                  onClick={() => handleQuickLogin('custom')}
+                  className="text-xs text-white font-black bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 px-3 py-1.5 rounded-xl transition-all shadow-md shadow-emerald-950/60 active:scale-95 text-center"
                 >
-                  Use 1-Tap Access →
+                  ⚡ Instant 1-Tap Access →
                 </button>
               </div>
             </div>

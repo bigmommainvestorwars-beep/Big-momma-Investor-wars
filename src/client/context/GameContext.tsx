@@ -47,6 +47,10 @@ export interface GameContextValue {
   lastReconnectedAt: number | null;
   reconnectHandshake: () => Promise<void>;
 
+  // Local device role: 'host' | 'guest' | 'unknown'
+  localRole: 'host' | 'guest' | 'unknown';
+  setLocalRole: (role: 'host' | 'guest' | 'unknown') => void;
+
   // Matchmaking Quick-Match Queue
   matchmakingQueueState: 'idle' | 'searching' | 'matched' | 'joining';
   queueTimeSeconds: number;
@@ -195,6 +199,26 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'reconnecting' | 'offline'>('connected');
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [lastReconnectedAt, setLastReconnectedAt] = useState<number | null>(null);
+
+  // Local device role: 'host' | 'guest' | 'unknown'
+  const [localRole, setLocalRoleState] = useState<'host' | 'guest' | 'unknown'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = sessionStorage.getItem('investor_wars_local_role');
+      if (saved === 'host' || saved === 'guest') return saved;
+    }
+    return 'unknown';
+  });
+
+  const setLocalRole = useCallback((role: 'host' | 'guest' | 'unknown') => {
+    setLocalRoleState(role);
+    if (typeof window !== 'undefined') {
+      if (role === 'unknown') {
+        sessionStorage.removeItem('investor_wars_local_role');
+      } else {
+        sessionStorage.setItem('investor_wars_local_role', role);
+      }
+    }
+  }, []);
 
   // Matchmaking Quick-Match Queue state
   const [matchmakingQueueState, setMatchmakingQueueState] = useState<'idle' | 'searching' | 'matched' | 'joining'>('idle');
@@ -546,6 +570,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const res = await cloudFunctionsClient.joinMatchByAccessCode(targetCode, reqId);
         const matchId = res.data?.matchId || (IS_TEST_ROOM_MODE ? TEST_MATCH_ID : undefined);
         if (!matchId) throw new Error(`No lobby found for code "${code}".`);
+        setLocalRole('guest');
         setActiveMatchId(matchId);
       } catch (err) {
         const msg = formatUserFacingMatchError(err);
@@ -555,7 +580,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, setLocalRole]
   );
 
   const createPrivateMatch = useCallback(async (): Promise<string> => {
@@ -584,6 +609,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         true,
         accessCode
       );
+      setLocalRole('host');
       setActiveMatchId(newMatchId);
       return newMatchId;
     } catch (err) {
@@ -593,7 +619,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, setLocalRole]);
 
   // Create Match
   const createMatch = useCallback(
@@ -611,6 +637,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
         const reqId = `create_${Date.now()}`;
         await cloudFunctionsClient.createMatch(newMatchId, reqId, boardId, rulesetVersion);
+        setLocalRole('host');
         setActiveMatchId(newMatchId);
         return newMatchId;
       } catch (err) {
@@ -621,7 +648,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, setLocalRole]
   );
 
   // Quick Solo vs AI match
@@ -648,6 +675,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Start match
       await cloudFunctionsClient.startMatch(newMatchId, `start_${Date.now()}`);
 
+      setLocalRole('host');
       setActiveMatchId(newMatchId);
       return newMatchId;
     } catch (err) {
@@ -657,7 +685,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, setLocalRole]);
 
   // Custom Bot Match: allows configurable bot counts (1 to 3 bots)
   const createCustomBotMatch = useCallback(
@@ -683,6 +711,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         await cloudFunctionsClient.startMatch(newMatchId, `start_${Date.now()}`);
+        setLocalRole('host');
         setActiveMatchId(newMatchId);
         return newMatchId;
       } catch (err) {
@@ -693,7 +722,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, setLocalRole]
   );
 
   // Join Match
@@ -711,6 +740,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const reqId = `join_${Date.now()}`;
         await cloudFunctionsClient.joinMatch(matchId, reqId, displayName);
+        setLocalRole('guest');
         setActiveMatchId(matchId);
       } catch (err) {
         const msg = formatUserFacingMatchError(err);
@@ -720,7 +750,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsActionPending(false);
       }
     },
-    [isAuthenticated]
+    [isAuthenticated, setLocalRole]
   );
 
   // Leave Match
@@ -730,6 +760,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const reqId = `leave_${Date.now()}`;
       await cloudFunctionsClient.leaveMatch(activeMatchId, reqId);
+      setLocalRole('unknown');
       setActiveMatchId(null);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -737,7 +768,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsActionPending(false);
     }
-  }, [activeMatchId]);
+  }, [activeMatchId, setLocalRole]);
 
   // Add Bot Player
   const addBotPlayer = useCallback(
@@ -1172,6 +1203,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isOnline,
         lastReconnectedAt,
         reconnectHandshake,
+        // Local device role
+        localRole,
+        setLocalRole,
         // Matchmaking Quick-Match Queue
         matchmakingQueueState,
         queueTimeSeconds,

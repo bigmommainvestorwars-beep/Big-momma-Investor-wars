@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { useGame } from '../../context/GameContext';
 import { useNavigation } from '../../context/NavigationContext';
@@ -26,6 +26,7 @@ export const LobbyScreen: React.FC = () => {
   const {
     match,
     players,
+    localRole,
     startMatch,
     addBotPlayer,
     fillRemainingWithBots,
@@ -58,14 +59,15 @@ export const LobbyScreen: React.FC = () => {
     (IS_TEST_ROOM_MODE ? TEST_ROOM_CODE : match?.id || 'ROOM');
 
   const isHost =
-    !match?.hostUserId ||
-    match.hostUserId === user?.uid ||
-    (players.length > 0 && players[0]?.id === user?.uid) ||
-    players.length <= 1;
+    localRole === 'host' ||
+    (localRole !== 'guest' && Boolean(
+      (match?.hostUserId && (match.hostUserId === user?.uid || (players.length > 0 && players[0]?.id === user?.uid))) ||
+      (!match?.hostUserId && players.length > 0 && players[0]?.id === user?.uid)
+    ));
 
   const canStartMatch = players.length >= 2;
 
-  const clientRole = isHost ? 'CLIENT A' : 'CLIENT B';
+  const clientRole = isHost ? 'CLIENT A (HOST)' : 'CLIENT B (GUEST)';
   const diagnosticString = `${clientRole} userId: ${user?.uid || 'anonymous'} matchId: ${match?.id || TEST_MATCH_ID} roomCode: ${accessCode}`;
 
   useEffect(() => {
@@ -117,21 +119,46 @@ export const LobbyScreen: React.FC = () => {
     }
   };
 
-  // Host player is either the first synced player, or the authenticated user if in the match/creating lobby
-  const hostPlayer =
-    players[0] ||
-    (user
-      ? {
-          id: user.uid,
-          userId: user.uid,
-          displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Investor Host'),
-          isBot: false,
-          connected: true,
-        }
-      : null);
+  // Host player (Slot 1)
+  const hostPlayer = useMemo(() => {
+    if (players.length > 0) {
+      if (match?.hostUserId) {
+        const found = players.find((p) => p.userId === match.hostUserId || p.id === match.hostUserId);
+        if (found) return found;
+      }
+      return players[0];
+    }
+    if (isHost && user) {
+      return {
+        id: user.uid,
+        userId: user.uid,
+        displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Investor Host'),
+        isBot: false,
+        connected: true,
+      };
+    }
+    return null;
+  }, [players, match?.hostUserId, isHost, user]);
+
+  // Guest player (Slot 2)
+  const guestPlayer = useMemo(() => {
+    if (players.length > 1) {
+      return players.find((p) => hostPlayer ? (p.id !== hostPlayer.id && p.userId !== hostPlayer.userId) : false) || players[1];
+    }
+    if (!isHost && user) {
+      return {
+        id: user.uid,
+        userId: user.uid,
+        displayName: user.displayName || (user.email ? user.email.split('@')[0] : 'Guest Investor'),
+        isBot: false,
+        connected: true,
+      };
+    }
+    return null;
+  }, [players, hostPlayer, isHost, user]);
 
   const maxPlayers = 2;
-  const playerCount = Math.max(players.length, hostPlayer ? 1 : 0);
+  const playerCount = Math.max(players.length, (hostPlayer ? 1 : 0) + (guestPlayer ? 1 : 0));
   const emptySeats = Math.max(0, maxPlayers - playerCount);
 
   return (
@@ -270,13 +297,13 @@ export const LobbyScreen: React.FC = () => {
           )}
 
           {/* Slot 2: Player 2 (or Empty Waiting for Player 2) */}
-          {players[1] ? (
+          {guestPlayer ? (
             <div
               id="player-slot-2"
               className="flex items-center gap-3.5 bg-slate-950/70 border border-cyan-800/50 p-3.5 rounded-2xl transition-all"
             >
               <div className="w-10 h-10 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0 border border-slate-700/60">
-                {players[1].isBot ? (
+                {guestPlayer.isBot ? (
                   <Bot className="w-5 h-5 text-purple-400" />
                 ) : (
                   <User className="w-5 h-5 text-cyan-400" />
@@ -284,17 +311,17 @@ export const LobbyScreen: React.FC = () => {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-bold text-slate-100 text-sm truncate flex items-center gap-2">
-                  <span>{players[1].displayName}</span>
+                  <span>{guestPlayer.displayName}</span>
                   <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-400 font-mono uppercase">
-                    Player 2
+                    Player 2 (Guest)
                   </span>
                 </div>
                 <div className="text-[10px] uppercase tracking-wider font-mono text-slate-500 flex items-center gap-2">
-                  <span>{players[1].isBot ? 'AI Bot' : 'Human Player'}</span>
+                  <span>{guestPlayer.isBot ? 'AI Bot' : 'Human Player'}</span>
                   <span>•</span>
                   <span className="text-emerald-400 flex items-center gap-1">
                     <Wifi className="w-2.5 h-2.5" />
-                    <span>{players[1].connected !== false ? 'Connected' : 'Reconnecting'}</span>
+                    <span>{guestPlayer.connected !== false ? 'Connected' : 'Reconnecting'}</span>
                   </span>
                 </div>
               </div>
@@ -306,7 +333,7 @@ export const LobbyScreen: React.FC = () => {
                   <button
                     type="button"
                     title="Remove Player 2"
-                    onClick={() => handleRemovePlayer(players[1].id)}
+                    onClick={() => handleRemovePlayer(guestPlayer.id)}
                     disabled={isActionPending}
                     className="p-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 text-red-400 border border-red-900/40 cursor-pointer disabled:opacity-40"
                   >
@@ -327,14 +354,16 @@ export const LobbyScreen: React.FC = () => {
                 <span>Slot 2: Waiting for Player 2</span>
               </div>
 
-              <button
-                id="add-bot-slot-2-btn"
-                onClick={() => addBotPlayer('AI Partner')}
-                disabled={isActionPending}
-                className="px-3 py-1.5 rounded-xl bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border border-purple-800/40 text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50"
-              >
-                + Add Bot
-              </button>
+              {isHost && (
+                <button
+                  id="add-bot-slot-2-btn"
+                  onClick={() => addBotPlayer('AI Partner')}
+                  disabled={isActionPending}
+                  className="px-3 py-1.5 rounded-xl bg-purple-950/40 hover:bg-purple-900/50 text-purple-300 border border-purple-800/40 text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer disabled:opacity-50"
+                >
+                  + Add Bot
+                </button>
+              )}
             </div>
           )}
 
@@ -423,19 +452,29 @@ export const LobbyScreen: React.FC = () => {
             <span>Leave</span>
           </button>
 
-          <button
-            id="start-match-lobby-btn"
-            onClick={handleStartGame}
-            disabled={isActionPending || !canStartMatch}
-            className="w-full sm:w-2/3 py-3.5 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border border-emerald-400/20"
-          >
-            <Play className="w-4 h-4 fill-current" />
-            <span>
-              {players.length < 2
-                ? 'Waiting for Player 2 (or Fill Bot)'
-                : `Start Match (${players.length} Players Ready)`}
-            </span>
-          </button>
+          {isHost ? (
+            <button
+              id="start-match-lobby-btn"
+              onClick={handleStartGame}
+              disabled={isActionPending || !canStartMatch}
+              className="w-full sm:w-2/3 py-3.5 bg-gradient-to-r from-emerald-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white rounded-xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer border border-emerald-400/20"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              <span>
+                {players.length < 2
+                  ? 'Waiting for Player 2 (or Fill Bot)'
+                  : `Start Match (${players.length} Players Ready)`}
+              </span>
+            </button>
+          ) : (
+            <div
+              id="guest-waiting-status"
+              className="w-full sm:w-2/3 py-3.5 bg-slate-950 border border-cyan-800/70 text-cyan-300 rounded-xl font-bold text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-inner"
+            >
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+              <span>Waiting for Host to launch match...</span>
+            </div>
+          )}
         </div>
       </motion.div>
     </div>
