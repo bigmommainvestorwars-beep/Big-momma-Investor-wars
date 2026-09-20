@@ -180,6 +180,10 @@ export class AuthoritativeServerEngine {
     return list;
   }
 
+  public getAllMatches(): AuthoritativeMatchContainer[] {
+    return Array.from(this.matches.values());
+  }
+
   public static getInstance(): AuthoritativeServerEngine {
     if (!AuthoritativeServerEngine.instance) {
       AuthoritativeServerEngine.instance = new AuthoritativeServerEngine();

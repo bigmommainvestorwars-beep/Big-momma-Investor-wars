@@ -212,8 +212,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    * before any protected multiplayer or lobby operation executes.
    */
   const ensureAuthenticatedUser = useCallback(async (forceTokenRefresh = false): Promise<User> => {
-    // 1. Wait for initial auth listener resolution
-    await authReadyPromiseRef.current;
+    // 1. Wait for initial auth listener resolution with 1500ms safety timeout
+    await Promise.race([
+      authReadyPromiseRef.current,
+      new Promise<void>((res) => setTimeout(res, 1500)),
+    ]);
 
     // 2. Check current Firebase Auth instance
     const fbUser = authService.getCurrentUser();

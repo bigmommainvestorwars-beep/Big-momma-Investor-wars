@@ -193,15 +193,161 @@ export class CloudFunctionsClient {
         break;
       }
       case 'findOrCreateQuickMatch': {
-        resultData = authoritativeServerEngine.findOrCreateQuickMatch(
-          data.requestId,
-          currentUserId,
-          (p.displayName as string) || currentDisplayName,
-          {
-            isPrivate: p.isPrivate as boolean | undefined,
-            accessCode: p.accessCode as string | undefined,
+        const db = getFirebaseFirestore();
+        let matchedMatchId: string | null = null;
+        let matchedMatchDoc: FirestoreMatchDoc | null = null;
+        let matchedPlayers: FirestorePlayerDoc[] = [];
+
+        console.log(`[CloudFunctionsClient:findOrCreateQuickMatch] Initiating search for user: ${currentUserId} (${currentDisplayName})`);
+
+        if (db && !p.isPrivate) {
+          try {
+            const matchesCol = collection(db, 'matches');
+            const q = query(
+              matchesCol,
+              where('status', '==', 'waiting_for_players'),
+              limit(15)
+            );
+
+            // Execute query with a 2.5-second timeout protection so matchmaking never hangs
+            const snap = await Promise.race([
+              getDocs(q),
+              new Promise<null>((res) => setTimeout(() => res(null), 2500)),
+            ]);
+
+            if (snap && 'docs' in snap) {
+              const now = Date.now();
+              const cutoff = now - 5 * 60 * 1000; // 5-minute inactivity threshold
+
+              console.log(`[CloudFunctionsClient:findOrCreateQuickMatch] Firestore returned ${snap.size} candidates with status='waiting_for_players'`);
+
+              for (const docSnap of snap.docs) {
+                const mData = { id: docSnap.id, ...docSnap.data() } as FirestoreMatchDoc;
+                const lastActive = mData.updatedAt || mData.createdAt || 0;
+                const isStale = lastActive < cutoff || (mData as any).isDeleted || mData.status === 'abandoned';
+                if (isStale) {
+                  continue;
+                }
+                if (mData.isPrivate) {
+                  continue;
+                }
+
+                // If user is already the host of this match, re-enter it
+                if (mData.hostUserId === currentUserId) {
+                  matchedMatchId = docSnap.id;
+                  matchedMatchDoc = mData;
+                  break;
+                }
+
+                // Fast check using participantUserIds if present
+                const participantList = Array.isArray(mData.participantUserIds) ? mData.participantUserIds : [];
+                if (participantList.length > 0 && participantList.length < 2) {
+                  matchedMatchId = docSnap.id;
+                  matchedMatchDoc = mData;
+                  break;
+                }
+
+                // Check players subcollection if participantUserIds is missing or empty
+                try {
+                  const pSnap = await getDocs(collection(db, 'matches', docSnap.id, 'players'));
+                  const pDocs = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
+                  const activeCount = pDocs.filter((pl) => pl.status === 'active' || pl.status === 'disconnected').length;
+
+                  if (activeCount > 0 && activeCount < 2) {
+                    matchedMatchId = docSnap.id;
+                    matchedMatchDoc = mData;
+                    matchedPlayers = pDocs;
+                    break;
+                  }
+                } catch {}
+              }
+            }
+          } catch (fsErr) {
+            console.warn('[CloudFunctionsClient:findOrCreateQuickMatch] Firestore query notice:', fsErr);
           }
-        );
+        }
+
+        // Also check in-memory matches as local fallback
+        if (!matchedMatchId) {
+          for (const container of authoritativeServerEngine.getAllMatches()) {
+            if (
+              container.match.status === 'waiting_for_players' &&
+              !container.match.isPrivate &&
+              container.players.size < 2
+            ) {
+              matchedMatchId = container.match.id;
+              matchedMatchDoc = container.match;
+              matchedPlayers = Array.from(container.players.values());
+              break;
+            }
+          }
+        }
+
+        if (matchedMatchId && matchedMatchDoc) {
+          // Join the existing match found
+          let container = authoritativeServerEngine.getMatchContainer(matchedMatchId);
+          if (!container) {
+            if (matchedPlayers.length === 0 && db) {
+              try {
+                const pSnap = await getDocs(collection(db, 'matches', matchedMatchId, 'players'));
+                matchedPlayers = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
+              } catch {}
+            }
+            container = authoritativeServerEngine.hydrateMatchContainer(matchedMatchDoc, matchedPlayers);
+          } else {
+            Object.assign(container.match, matchedMatchDoc);
+            if (matchedPlayers.length > 0) {
+              container.players.clear();
+              for (const pl of matchedPlayers) {
+                container.players.set(pl.id, { ...pl });
+              }
+            }
+          }
+
+          const joinedPlayer = authoritativeServerEngine.joinMatch(
+            matchedMatchId,
+            data.requestId,
+            currentUserId,
+            (p.displayName as string) || currentDisplayName
+          );
+
+          resultData = {
+            matchId: matchedMatchId,
+            isNew: container.match.hostUserId === currentUserId,
+            accessCode: matchedMatchDoc.accessCode || `BM-${matchedMatchId.slice(-4).toUpperCase()}`,
+            player: joinedPlayer,
+          };
+
+          console.log(`[CloudFunctionsClient:findOrCreateQuickMatch] JOINED MATCH: userId: ${currentUserId} matchId: ${matchedMatchId} roomCode: ${(resultData as any).accessCode}`);
+        } else {
+          // No open match found, create new match
+          const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+          const accessCode =
+            (p.accessCode as string) || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+          const createdMatch = authoritativeServerEngine.createMatch(
+            newMatchId,
+            data.requestId,
+            'default-standard-board',
+            '1.0.0',
+            currentUserId,
+            (p.displayName as string) || currentDisplayName,
+            (p.isPrivate as boolean) ?? false,
+            accessCode
+          );
+
+          const container = authoritativeServerEngine.getMatchContainer(newMatchId)!;
+          const hostPlayer = container.players.get(currentUserId)!;
+
+          resultData = {
+            matchId: newMatchId,
+            isNew: true,
+            accessCode,
+            player: hostPlayer,
+          };
+
+          console.log(`[CloudFunctionsClient:findOrCreateQuickMatch] CREATED MATCH: userId: ${currentUserId} matchId: ${newMatchId} roomCode: ${accessCode}`);
+        }
         break;
       }
       case 'joinMatchByAccessCode': {

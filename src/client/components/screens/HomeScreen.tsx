@@ -54,12 +54,14 @@ export const HomeScreen: React.FC = () => {
   const [joiningLobbyId, setJoiningLobbyId] = useState<string | null>(null);
   const [lobbyJoinError, setLobbyJoinError] = useState<string | null>(null);
   const [hostingError, setHostingError] = useState<string | null>(null);
+  const [quickMatchError, setQuickMatchError] = useState<string | null>(null);
   const [isQuickMatching, setIsQuickMatching] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
 
   const handlePurgeAllLobbies = async () => {
     setIsPurgingLobbies(true);
     setLobbyJoinError(null);
+    setQuickMatchError(null);
     try {
       await cloudFunctionsClient.deleteAllOpenLobbies();
     } catch (e) {
@@ -71,6 +73,7 @@ export const HomeScreen: React.FC = () => {
 
   const handleQuickMatch = async () => {
     setIsQuickMatching(true);
+    setQuickMatchError(null);
     setCodeError(null);
     setHostingError(null);
     setLobbyJoinError(null);
@@ -79,8 +82,8 @@ export const HomeScreen: React.FC = () => {
       navigate('LOBBY');
     } catch (err: any) {
       console.warn('Quick Match queue error:', err);
-      const msg = err?.message || 'Matchmaking search timed out. Please try hosting a room.';
-      setHostingError(msg);
+      const msg = err?.message || 'Matchmaking search encountered an issue. Please try again or host a room.';
+      setQuickMatchError(msg);
     } finally {
       setIsQuickMatching(false);
     }
@@ -236,27 +239,60 @@ export const HomeScreen: React.FC = () => {
           )}
 
           {/* Quick Match / Multiplayer Instant Play */}
-          <button
-            id="quick-matchmaking-btn"
-            disabled={isQuickMatching}
-            onClick={handleQuickMatch}
-            className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 active:scale-[0.98] text-white font-black text-sm tracking-wider uppercase flex items-center justify-between transition-all shadow-xl shadow-emerald-950/50 cursor-pointer disabled:opacity-60"
-          >
-            <div className="flex items-center gap-3">
-              {isQuickMatching ? (
-                <RefreshCw className="w-5 h-5 animate-spin text-white" />
-              ) : (
-                <Zap className="w-5 h-5 text-amber-300 fill-amber-300" />
-              )}
-              <div className="text-left">
-                <div>{isQuickMatching ? 'Searching Match...' : 'Quick Matchmaking'}</div>
-                <div className="text-[10px] font-mono text-emerald-200 font-normal">
-                  Instant 1v1 or 4-Player Syndicate
+          <div className="space-y-2">
+            <button
+              id="quick-matchmaking-btn"
+              disabled={isQuickMatching}
+              onClick={handleQuickMatch}
+              className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 active:scale-[0.98] text-white font-black text-sm tracking-wider uppercase flex items-center justify-between transition-all shadow-xl shadow-emerald-950/50 cursor-pointer disabled:opacity-60"
+            >
+              <div className="flex items-center gap-3">
+                {isQuickMatching ? (
+                  <RefreshCw className="w-5 h-5 animate-spin text-white" />
+                ) : (
+                  <Zap className="w-5 h-5 text-amber-300 fill-amber-300" />
+                )}
+                <div className="text-left">
+                  <div>{isQuickMatching ? 'Searching Match...' : 'Quick Matchmaking'}</div>
+                  <div className="text-[10px] font-mono text-emerald-200 font-normal">
+                    Instant 1v1 or 4-Player Syndicate
+                  </div>
                 </div>
               </div>
-            </div>
-            <ArrowRight className="w-4 h-4 text-emerald-200" />
-          </button>
+              <ArrowRight className="w-4 h-4 text-emerald-200" />
+            </button>
+
+            {quickMatchError && (
+              <div
+                id="quick-match-error-box"
+                className="p-3 rounded-xl bg-rose-950/70 border border-rose-800 text-left space-y-1.5 font-mono text-xs"
+              >
+                <div className="flex items-center gap-2 text-rose-300 font-bold">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span>Matchmaking Notice</span>
+                </div>
+                <div className="text-[11px] text-rose-200/90 font-sans leading-relaxed">
+                  {quickMatchError}
+                </div>
+                <div className="pt-1 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleQuickMatch}
+                    className="text-[10px] text-emerald-400 hover:underline cursor-pointer font-bold"
+                  >
+                    Retry Matchmaking
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQuickMatchError(null)}
+                    className="text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer ml-auto"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Enter Room Access Code Accordion */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl overflow-hidden transition-all">
