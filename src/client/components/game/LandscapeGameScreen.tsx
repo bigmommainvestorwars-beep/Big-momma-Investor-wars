@@ -211,7 +211,11 @@ export const LandscapeGameScreen: React.FC = () => {
 
   // Phase analysis
   const currentPhase = match?.currentPhase || 'TURN_START';
-  const canRoll = isMyTurn && (currentPhase === 'TURN_START' || currentPhase === 'AWAITING_ROLL');
+  const canRoll =
+    isMyTurn &&
+    (currentPhase === 'TURN_START' ||
+      currentPhase === 'AWAITING_ROLL' ||
+      currentPhase === 'ROLL_OR_ACTION');
   const canActOnProperty = isMyTurn && currentPhase === 'AWAITING_ACTION';
   const canEndTurn = isMyTurn && currentPhase === 'TURN_END';
 
@@ -772,7 +776,9 @@ export const LandscapeGameScreen: React.FC = () => {
                       ? `${currentPlayer?.displayName || 'AI'} is computing move...`
                       : isOtherHumanTurn
                       ? `Waiting for ${currentPlayer?.displayName || 'opponent'} to roll...`
-                      : currentPhase !== 'TURN_START'
+                      : currentPhase !== 'TURN_START' &&
+                        currentPhase !== 'AWAITING_ROLL' &&
+                        currentPhase !== 'ROLL_OR_ACTION'
                       ? 'Turn in progress'
                       : undefined
                   }

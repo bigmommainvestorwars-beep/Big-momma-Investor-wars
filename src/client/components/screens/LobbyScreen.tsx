@@ -41,18 +41,6 @@ export const LobbyScreen: React.FC = () => {
 
   const [copiedCode, setCopiedCode] = useState(false);
 
-  // Auto-navigate to gameplay once match has started
-  useEffect(() => {
-    if (
-      match?.status === 'active' ||
-      match?.status === 'in_progress' ||
-      (match?.currentPhase && match.currentPhase !== 'LOBBY')
-    ) {
-      console.log('[LobbyScreen] Match started. Transitioning to GAMEPLAY for user:', user?.uid);
-      navigate('GAMEPLAY');
-    }
-  }, [match?.status, match?.currentPhase, navigate, user?.uid]);
-
   const accessCode =
     match?.accessCode ||
     (match as any)?.accessCode ||
@@ -87,7 +75,6 @@ export const LobbyScreen: React.FC = () => {
   const handleStartGame = async () => {
     try {
       await startMatch();
-      navigate('GAMEPLAY');
     } catch (err) {
       console.warn('Start match error:', err);
     }

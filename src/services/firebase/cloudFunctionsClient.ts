@@ -510,23 +510,19 @@ export class CloudFunctionsClient {
       case 'startMatch': {
         if (!matchId) throw new Error('Match ID required');
         if (db) {
-          try {
-            const pSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
-            const pDocs = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
-            pDocs.sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
-            const firstPlayerId = pDocs.length > 0 ? pDocs[0].id : user.uid;
+          const pSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
+          const pDocs = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
+          pDocs.sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+          const firstPlayerId = pDocs.length > 0 ? pDocs[0].id : user.uid;
 
-            await updateDoc(doc(db, 'matches', matchId), {
-              status: 'in_progress',
-              currentPhase: 'ROLL_OR_ACTION',
-              currentPlayerId: firstPlayerId,
-              turnNumber: 1,
-              roundNumber: 1,
-              updatedAt: Date.now(),
-            });
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:startMatch] update note:', err);
-          }
+          await updateDoc(doc(db, 'matches', matchId), {
+            status: 'in_progress',
+            currentPhase: 'TURN_START',
+            currentPlayerId: firstPlayerId,
+            turnNumber: 1,
+            roundNumber: 1,
+            updatedAt: Date.now(),
+          });
         }
         return { success: true } as TRes;
       }
@@ -598,7 +594,7 @@ export class CloudFunctionsClient {
               currentPlayerId: nextPlayer ? nextPlayer.id : user.uid,
               turnNumber: newTurn,
               roundNumber: newRound,
-              currentPhase: 'ROLL_OR_ACTION',
+              currentPhase: 'TURN_START',
               lastRoll: null,
               lastRollPlayerId: null,
               updatedAt: Date.now(),
