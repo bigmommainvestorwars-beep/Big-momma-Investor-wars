@@ -108,10 +108,10 @@ export const HomeScreen: React.FC = () => {
     setLobbyJoinError(null);
     setCodeError(null);
     try {
-      if (matchId) {
-        await joinMatch(matchId);
-      } else if (accessCode) {
+      if (accessCode) {
         await joinByRoomCode(accessCode);
+      } else {
+        await joinMatch(matchId);
       }
       navigate('LOBBY');
     } catch (err: any) {
@@ -131,7 +131,6 @@ export const HomeScreen: React.FC = () => {
       navigate('LOBBY');
     } catch (err: any) {
       console.warn('Host private match error:', err);
-      setLobbyJoinError(err?.message || 'Failed to create lobby. Please try again.');
     } finally {
       setIsHosting(false);
     }

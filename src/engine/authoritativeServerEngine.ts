@@ -199,10 +199,6 @@ export class AuthoritativeServerEngine {
     return this.matches.get(matchId);
   }
 
-  public getAllMatches(): Map<string, AuthoritativeMatchContainer> {
-    return this.matches;
-  }
-
   public getMatch(matchId: string): FirestoreMatchDoc | undefined {
     return this.matches.get(matchId)?.match;
   }
@@ -402,10 +398,7 @@ export class AuthoritativeServerEngine {
       activeModifiers: [],
     };
 
-    this.matches.set(targetMatchId, container);
-    if (matchId !== targetMatchId) {
-      this.matches.set(matchId, container);
-    }
+    this.matches.set(matchId, container);
     this.appendLog(container, 'MATCH_CREATED', `Match lobby created by ${hostDisplayName}.`, hostUserId);
     this.emitStateChange(container);
 

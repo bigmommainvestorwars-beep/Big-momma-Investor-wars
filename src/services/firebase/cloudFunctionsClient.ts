@@ -125,21 +125,13 @@ export class CloudFunctionsClient {
         ? TEST_MATCH_ID
         : data.matchId;
 
-    const isValidMatchIdForPreHydrate =
-      targetMatchIdToHydrate &&
-      targetMatchIdToHydrate !== 'matchmaking' &&
-      targetMatchIdToHydrate !== 'system' &&
-      functionName !== 'createMatch' &&
-      functionName !== 'findOrCreateQuickMatch' &&
-      functionName !== 'joinMatchByAccessCode';
-
-    if (isValidMatchIdForPreHydrate) {
+    if (targetMatchIdToHydrate && functionName !== 'createMatch') {
       const db = getFirebaseFirestore();
       if (db) {
         try {
           const mDocRef = doc(db, 'matches', targetMatchIdToHydrate);
-          const pColRef = collection(db, 'matches', targetMatchIdToHydrate, 'players');
-          const [mSnap, pSnap] = await Promise.all([getDoc(mDocRef), getDocs(pColRef)]);
+          const mSnap = await getDoc(mDocRef);
+          const pSnap = await getDocs(collection(db, 'matches', targetMatchIdToHydrate, 'players'));
 
           if (mSnap.exists()) {
             const matchData = { id: mSnap.id, ...mSnap.data() } as FirestoreMatchDoc;
@@ -201,82 +193,15 @@ export class CloudFunctionsClient {
         break;
       }
       case 'findOrCreateQuickMatch': {
-        const isPrivate = Boolean(p.isPrivate);
-        let matchedId: string | undefined;
-
-        // 1. Check in-memory engine first
-        if (!isPrivate) {
-          for (const [id, cont] of authoritativeServerEngine.getAllMatches().entries()) {
-            if (
-              cont.match.status === 'waiting_for_players' &&
-              !cont.match.isPrivate &&
-              cont.players.size < 4
-            ) {
-              matchedId = id;
-              break;
-            }
+        resultData = authoritativeServerEngine.findOrCreateQuickMatch(
+          data.requestId,
+          currentUserId,
+          (p.displayName as string) || currentDisplayName,
+          {
+            isPrivate: p.isPrivate as boolean | undefined,
+            accessCode: p.accessCode as string | undefined,
           }
-        }
-
-        // 2. Check Firestore for public waiting lobbies across any device
-        const db = getFirebaseFirestore();
-        if (!matchedId && !isPrivate && db) {
-          try {
-            const openQuery = query(
-              collection(db, 'matches'),
-              where('status', '==', 'waiting_for_players'),
-              limit(10)
-            );
-            const openSnap = await getDocs(openQuery);
-            for (const d of openSnap.docs) {
-              const mData = d.data() as FirestoreMatchDoc;
-              if (
-                mData.isPrivate !== true &&
-                mData.status === 'waiting_for_players' &&
-                (!mData.participantUserIds || mData.participantUserIds.length < 4)
-              ) {
-                const targetId = d.id;
-                // Hydrate container and players
-                try {
-                  const pCol = collection(db, 'matches', targetId, 'players');
-                  const pSnap = await getDocs(pCol);
-                  const pData = pSnap.docs.map((pDoc) => ({ id: pDoc.id, ...pDoc.data() })) as FirestorePlayerDoc[];
-                  authoritativeServerEngine.hydrateMatchContainer({ id: targetId, ...mData }, pData);
-                  matchedId = targetId;
-                  break;
-                } catch {}
-              }
-            }
-          } catch (qmErr) {
-            console.warn('[CloudFunctionsClient] Quick match Firestore search note:', qmErr);
-          }
-        }
-
-        if (matchedId) {
-          const joinedPlayer = authoritativeServerEngine.joinMatch(
-            matchedId,
-            data.requestId,
-            currentUserId,
-            (p.displayName as string) || currentDisplayName
-          );
-          const cont = authoritativeServerEngine.getMatchContainer(matchedId);
-          resultData = {
-            matchId: matchedId,
-            isNew: false,
-            accessCode: cont?.match.accessCode || matchedId.slice(-6).toUpperCase(),
-            player: joinedPlayer,
-          };
-        } else {
-          resultData = authoritativeServerEngine.findOrCreateQuickMatch(
-            data.requestId,
-            currentUserId,
-            (p.displayName as string) || currentDisplayName,
-            {
-              isPrivate: p.isPrivate as boolean | undefined,
-              accessCode: p.accessCode as string | undefined,
-            }
-          );
-        }
+        );
         break;
       }
       case 'joinMatchByAccessCode': {
@@ -302,62 +227,82 @@ export class CloudFunctionsClient {
         // Check in-memory engine first
         let container = targetMatchId ? authoritativeServerEngine.getMatchContainer(targetMatchId) : undefined;
 
-        // If not found in local memory, query Cloud Firestore with fast parallel lookups
+        // If not found in local memory, query Cloud Firestore with multiple fallback strategies
         const db = getFirebaseFirestore();
         if (db && !container) {
           if (!targetMatchId) {
             try {
-              // 1. Direct fast parallel lookup in dedicated room_codes collection + direct match ID
-              const codeLookups: Promise<any>[] = [
-                getDoc(doc(db, 'room_codes', cleanCode)),
-                getDoc(doc(db, 'room_codes', bmCode)),
-              ];
-              if (rawCode && rawCode !== cleanCode) {
-                codeLookups.push(getDoc(doc(db, 'room_codes', rawCode)));
-              }
-              if (rawCodeInput.trim()) {
-                codeLookups.push(getDoc(doc(db, 'matches', rawCodeInput.trim())));
+              // 1. Direct fast lookup in dedicated room_codes collection
+              try {
+                const codeRef1 = doc(db, 'room_codes', cleanCode);
+                const codeSnap1 = await getDoc(codeRef1);
+                if (codeSnap1.exists() && codeSnap1.data()?.matchId) {
+                  targetMatchId = codeSnap1.data().matchId;
+                }
+              } catch (rcErr) {
+                console.warn('[CloudFunctionsClient] room_codes cleanCode check note:', rcErr);
               }
 
-              const snaps = await Promise.all(codeLookups.map((p) => p.catch(() => null)));
-              for (const s of snaps) {
-                if (s && s.exists && s.exists()) {
-                  const sData = s.data();
-                  if (sData?.matchId) {
-                    targetMatchId = sData.matchId;
-                    break;
-                  } else if (s.ref.parent.id === 'matches') {
-                    targetMatchId = s.id;
-                    break;
+              if (!targetMatchId && bmCode) {
+                try {
+                  const codeRef2 = doc(db, 'room_codes', bmCode);
+                  const codeSnap2 = await getDoc(codeRef2);
+                  if (codeSnap2.exists() && codeSnap2.data()?.matchId) {
+                    targetMatchId = codeSnap2.data().matchId;
                   }
+                } catch {}
+              }
+
+              if (!targetMatchId && rawCode && rawCode !== cleanCode) {
+                try {
+                  const codeRef3 = doc(db, 'room_codes', rawCode);
+                  const codeSnap3 = await getDoc(codeRef3);
+                  if (codeSnap3.exists() && codeSnap3.data()?.matchId) {
+                    targetMatchId = codeSnap3.data().matchId;
+                  }
+                } catch {}
+              }
+
+              // 2. Direct document lookup if user entered a raw matchId
+              if (!targetMatchId && rawCodeInput.trim()) {
+                const directDoc = await getDoc(doc(db, 'matches', rawCodeInput.trim()));
+                if (directDoc.exists()) {
+                  targetMatchId = directDoc.id;
                 }
               }
 
-              // 2. Query accessCode matching in matches collection in parallel
-              if (!targetMatchId) {
-                const matchesCol = collection(db, 'matches');
-                const qClean = query(matchesCol, where('accessCode', '==', cleanCode), limit(1));
-                const qBM = bmCode !== cleanCode ? query(matchesCol, where('accessCode', '==', bmCode), limit(1)) : null;
-                const qRaw = rawCode && rawCode !== cleanCode ? query(matchesCol, where('accessCode', '==', rawCode), limit(1)) : null;
+              const matchesCol = collection(db, 'matches');
 
-                const matchSnaps = await Promise.all([
-                  getDocs(qClean).catch(() => null),
-                  qBM ? getDocs(qBM).catch(() => null) : Promise.resolve(null),
-                  qRaw ? getDocs(qRaw).catch(() => null) : Promise.resolve(null),
-                ]);
-
-                for (const ms of matchSnaps) {
-                  if (ms && !ms.empty) {
-                    targetMatchId = ms.docs[0].id;
-                    break;
-                  }
+              // 3. Query accessCode matching cleanCode
+              if (!targetMatchId && cleanCode) {
+                const q1 = query(matchesCol, where('accessCode', '==', cleanCode), limit(1));
+                const s1 = await getDocs(q1);
+                if (!s1.empty) {
+                  targetMatchId = s1.docs[0].id;
                 }
               }
 
-              // 3. Fallback scan of active waiting lobbies
+              // 4. Query accessCode matching bmCode (e.g. BM-XXXX)
+              if (!targetMatchId && bmCode) {
+                const q2 = query(matchesCol, where('accessCode', '==', bmCode), limit(1));
+                const s2 = await getDocs(q2);
+                if (!s2.empty) {
+                  targetMatchId = s2.docs[0].id;
+                }
+              }
+
+              // 5. Query accessCode matching rawCode without prefix
+              if (!targetMatchId && rawCode && rawCode !== cleanCode) {
+                const q3 = query(matchesCol, where('accessCode', '==', rawCode), limit(1));
+                const s3 = await getDocs(q3);
+                if (!s3.empty) {
+                  targetMatchId = s3.docs[0].id;
+                }
+              }
+
+              // 6. Broad scan of active waiting lobbies (resilient fallback for any subtle code formatting differences)
               if (!targetMatchId) {
                 try {
-                  const matchesCol = collection(db, 'matches');
                   const qOpen = query(matchesCol, where('status', '==', 'waiting_for_players'), limit(25));
                   const sOpen = await getDocs(qOpen);
                   for (const d of sOpen.docs) {
@@ -386,9 +331,7 @@ export class CloudFunctionsClient {
           if (targetMatchId && !container) {
             try {
               const mDocRef = doc(db, 'matches', targetMatchId);
-              const pColRef = collection(db, 'matches', targetMatchId, 'players');
-              const [mSnap, pSnap] = await Promise.all([getDoc(mDocRef), getDocs(pColRef)]);
-
+              const mSnap = await getDoc(mDocRef);
               if (mSnap.exists()) {
                 const matchData = { id: mSnap.id, ...mSnap.data() } as FirestoreMatchDoc;
 
@@ -417,6 +360,7 @@ export class CloudFunctionsClient {
                   );
                 }
 
+                const pSnap = await getDocs(collection(db, 'matches', targetMatchId, 'players'));
                 const playersData = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
                 const activePlayerCount = playersData.filter((pl) => pl.status === 'active' || pl.status === 'disconnected').length;
 
@@ -688,10 +632,10 @@ export class CloudFunctionsClient {
     }
 
     const resolvedMatchId =
+      data.matchId ||
       (resultData as any)?.matchId ||
-      ((resultData as any)?.match?.id) ||
       (resultData as any)?.id ||
-      (data.matchId && data.matchId !== 'matchmaking' && data.matchId !== 'system' ? data.matchId : undefined) ||
+      ((resultData as any)?.match?.id) ||
       (IS_TEST_ROOM_MODE && !data.matchId ? TEST_MATCH_ID : undefined);
 
     const container = resolvedMatchId ? authoritativeServerEngine.getMatchContainer(resolvedMatchId) : undefined;
@@ -701,31 +645,28 @@ export class CloudFunctionsClient {
       const db = getFirebaseFirestore();
       if (db) {
         try {
-          const writePromises: Promise<any>[] = [];
-
-          // 1. Match document write
-          writePromises.push(
-            setDoc(
-              doc(db, 'matches', container.match.id),
-              {
-                ...container.match,
-                id: container.match.id,
-                updatedAt: Date.now(),
-              },
-              { merge: true }
-            )
+          await setDoc(
+            doc(db, 'matches', container.match.id),
+            {
+              ...container.match,
+              id: container.match.id,
+              updatedAt: Date.now(),
+            },
+            { merge: true }
           );
 
-          // 2. Synchronize room code directory for instant O(1) cross-device discovery
+          // Synchronize room code directory for instant O(1) cross-device discovery
           if (container.match.accessCode) {
             const codeRaw = container.match.accessCode.trim().toUpperCase();
             const cleanRaw = codeRaw.replace(/^BM-/, '');
             const bmFormatted = `BM-${cleanRaw}`;
 
             if (container.match.status === 'abandoned' || (container.match as any).isDeleted) {
-              writePromises.push(deleteDoc(doc(db, 'room_codes', codeRaw)).catch(() => {}));
-              if (cleanRaw) writePromises.push(deleteDoc(doc(db, 'room_codes', cleanRaw)).catch(() => {}));
-              if (bmFormatted) writePromises.push(deleteDoc(doc(db, 'room_codes', bmFormatted)).catch(() => {}));
+              try {
+                await deleteDoc(doc(db, 'room_codes', codeRaw));
+                if (cleanRaw) await deleteDoc(doc(db, 'room_codes', cleanRaw));
+                if (bmFormatted) await deleteDoc(doc(db, 'room_codes', bmFormatted));
+              } catch {}
             } else {
               const codeDocData = {
                 matchId: container.match.id,
@@ -736,12 +677,16 @@ export class CloudFunctionsClient {
                 createdAt: container.match.createdAt,
                 updatedAt: Date.now(),
               };
-              writePromises.push(setDoc(doc(db, 'room_codes', codeRaw), codeDocData, { merge: true }));
-              if (cleanRaw && cleanRaw !== codeRaw) {
-                writePromises.push(setDoc(doc(db, 'room_codes', cleanRaw), codeDocData, { merge: true }));
-              }
-              if (bmFormatted && bmFormatted !== codeRaw) {
-                writePromises.push(setDoc(doc(db, 'room_codes', bmFormatted), codeDocData, { merge: true }));
+              try {
+                await setDoc(doc(db, 'room_codes', codeRaw), codeDocData, { merge: true });
+                if (cleanRaw) {
+                  await setDoc(doc(db, 'room_codes', cleanRaw), codeDocData, { merge: true });
+                }
+                if (bmFormatted && bmFormatted !== codeRaw) {
+                  await setDoc(doc(db, 'room_codes', bmFormatted), codeDocData, { merge: true });
+                }
+              } catch (codeSaveErr) {
+                console.warn('[CloudFunctionsClient] Room code directory sync notice:', codeSaveErr);
               }
             }
           }
@@ -752,7 +697,7 @@ export class CloudFunctionsClient {
               const oldSnap = await getDocs(playersCol);
               for (const oldDoc of oldSnap.docs) {
                 if (!container.players.has(oldDoc.id)) {
-                  writePromises.push(deleteDoc(oldDoc.ref));
+                  await deleteDoc(oldDoc.ref);
                 }
               }
             } catch (cleanupErr) {
@@ -762,33 +707,25 @@ export class CloudFunctionsClient {
           if (functionName === 'removeLobbyPlayer' || functionName === 'removeBotPlayer') {
             const targetId = (p.targetPlayerId as string) || (p.botId as string);
             if (targetId) {
-              writePromises.push(deleteDoc(doc(playersCol, targetId)).catch(() => {}));
+              try {
+                await deleteDoc(doc(playersCol, targetId));
+              } catch (delErr) {
+                console.warn('[CloudFunctionsClient] Deleted player doc notice:', delErr);
+              }
             }
           }
           for (const player of container.players.values()) {
-            writePromises.push(
-              setDoc(
-                doc(playersCol, player.id),
-                {
-                  ...player,
-                  userId: player.userId || player.id,
-                  connected: player.connected !== false,
-                  lastActiveAt: Date.now(),
-                },
-                { merge: true }
-              )
+            await setDoc(
+              doc(playersCol, player.id),
+              {
+                ...player,
+                userId: player.userId || player.id,
+                connected: player.connected !== false,
+                lastActiveAt: Date.now(),
+              },
+              { merge: true }
             );
           }
-
-          const syncTask = Promise.all(writePromises).catch((syncErr) => {
-            console.warn('[CloudFunctionsClient] Firestore background sync warning:', syncErr);
-          });
-
-          // Wait at most 800ms for cloud persistence so UI transitions instantly even on high-latency mobile networks
-          await Promise.race([
-            syncTask,
-            new Promise((resolve) => setTimeout(resolve, 800)),
-          ]);
         } catch (err) {
           console.warn('[CloudFunctionsClient] Firestore persistence notice:', err);
         }
