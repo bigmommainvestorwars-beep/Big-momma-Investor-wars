@@ -227,22 +227,53 @@ export class CloudFunctionsClient {
         // Check in-memory engine first
         let container = targetMatchId ? authoritativeServerEngine.getMatchContainer(targetMatchId) : undefined;
 
-        // If not found in local memory, query Cloud Firestore matches collection
+        // If not found in local memory, query Cloud Firestore with multiple fallback strategies
         const db = getFirebaseFirestore();
         if (db && !container) {
           if (!targetMatchId) {
             try {
-              const matchesCol = collection(db, 'matches');
+              // 1. Direct fast lookup in dedicated room_codes collection
+              try {
+                const codeRef1 = doc(db, 'room_codes', cleanCode);
+                const codeSnap1 = await getDoc(codeRef1);
+                if (codeSnap1.exists() && codeSnap1.data()?.matchId) {
+                  targetMatchId = codeSnap1.data().matchId;
+                }
+              } catch (rcErr) {
+                console.warn('[CloudFunctionsClient] room_codes cleanCode check note:', rcErr);
+              }
 
-              // 1. Direct document lookup if user entered a raw matchId
-              if (rawCodeInput.trim()) {
+              if (!targetMatchId && bmCode) {
+                try {
+                  const codeRef2 = doc(db, 'room_codes', bmCode);
+                  const codeSnap2 = await getDoc(codeRef2);
+                  if (codeSnap2.exists() && codeSnap2.data()?.matchId) {
+                    targetMatchId = codeSnap2.data().matchId;
+                  }
+                } catch {}
+              }
+
+              if (!targetMatchId && rawCode && rawCode !== cleanCode) {
+                try {
+                  const codeRef3 = doc(db, 'room_codes', rawCode);
+                  const codeSnap3 = await getDoc(codeRef3);
+                  if (codeSnap3.exists() && codeSnap3.data()?.matchId) {
+                    targetMatchId = codeSnap3.data().matchId;
+                  }
+                } catch {}
+              }
+
+              // 2. Direct document lookup if user entered a raw matchId
+              if (!targetMatchId && rawCodeInput.trim()) {
                 const directDoc = await getDoc(doc(db, 'matches', rawCodeInput.trim()));
                 if (directDoc.exists()) {
                   targetMatchId = directDoc.id;
                 }
               }
 
-              // 2. Query accessCode matching cleanCode
+              const matchesCol = collection(db, 'matches');
+
+              // 3. Query accessCode matching cleanCode
               if (!targetMatchId && cleanCode) {
                 const q1 = query(matchesCol, where('accessCode', '==', cleanCode), limit(1));
                 const s1 = await getDocs(q1);
@@ -251,7 +282,7 @@ export class CloudFunctionsClient {
                 }
               }
 
-              // 3. Query accessCode matching bmCode (e.g. BM-XXXX)
+              // 4. Query accessCode matching bmCode (e.g. BM-XXXX)
               if (!targetMatchId && bmCode) {
                 const q2 = query(matchesCol, where('accessCode', '==', bmCode), limit(1));
                 const s2 = await getDocs(q2);
@@ -260,12 +291,36 @@ export class CloudFunctionsClient {
                 }
               }
 
-              // 4. Query accessCode matching rawCode without prefix
+              // 5. Query accessCode matching rawCode without prefix
               if (!targetMatchId && rawCode && rawCode !== cleanCode) {
                 const q3 = query(matchesCol, where('accessCode', '==', rawCode), limit(1));
                 const s3 = await getDocs(q3);
                 if (!s3.empty) {
                   targetMatchId = s3.docs[0].id;
+                }
+              }
+
+              // 6. Broad scan of active waiting lobbies (resilient fallback for any subtle code formatting differences)
+              if (!targetMatchId) {
+                try {
+                  const qOpen = query(matchesCol, where('status', '==', 'waiting_for_players'), limit(25));
+                  const sOpen = await getDocs(qOpen);
+                  for (const d of sOpen.docs) {
+                    const data = d.data() as FirestoreMatchDoc;
+                    const docCode = (data.accessCode || '').trim().toUpperCase();
+                    const docRaw = docCode.replace(/^BM-/, '');
+                    if (
+                      docCode === cleanCode ||
+                      docCode === bmCode ||
+                      docRaw === rawCode ||
+                      d.id.toUpperCase().endsWith(rawCode)
+                    ) {
+                      targetMatchId = d.id;
+                      break;
+                    }
+                  }
+                } catch (openErr) {
+                  console.warn('[CloudFunctionsClient] Open matches fallback scan notice:', openErr);
                 }
               }
             } catch (err) {
@@ -282,7 +337,8 @@ export class CloudFunctionsClient {
 
                 const now = Date.now();
                 const lastActive = matchData.updatedAt || matchData.createdAt || 0;
-                const isStale = (now - lastActive > 5 * 60 * 1000);
+                // Generous 60-minute inactivity threshold for active lobbies to tolerate clock skew across devices
+                const isStale = (now - lastActive > 60 * 60 * 1000);
                 if ((matchData as any).isDeleted || matchData.status === 'abandoned' || isStale) {
                   throw new ServerFunctionError(
                     SERVER_ERROR_CODES.MATCH_NOT_FOUND,
@@ -598,6 +654,42 @@ export class CloudFunctionsClient {
             },
             { merge: true }
           );
+
+          // Synchronize room code directory for instant O(1) cross-device discovery
+          if (container.match.accessCode) {
+            const codeRaw = container.match.accessCode.trim().toUpperCase();
+            const cleanRaw = codeRaw.replace(/^BM-/, '');
+            const bmFormatted = `BM-${cleanRaw}`;
+
+            if (container.match.status === 'abandoned' || (container.match as any).isDeleted) {
+              try {
+                await deleteDoc(doc(db, 'room_codes', codeRaw));
+                if (cleanRaw) await deleteDoc(doc(db, 'room_codes', cleanRaw));
+                if (bmFormatted) await deleteDoc(doc(db, 'room_codes', bmFormatted));
+              } catch {}
+            } else {
+              const codeDocData = {
+                matchId: container.match.id,
+                accessCode: codeRaw,
+                hostUserId: container.match.hostUserId,
+                status: container.match.status,
+                isPrivate: container.match.isPrivate ?? true,
+                createdAt: container.match.createdAt,
+                updatedAt: Date.now(),
+              };
+              try {
+                await setDoc(doc(db, 'room_codes', codeRaw), codeDocData, { merge: true });
+                if (cleanRaw) {
+                  await setDoc(doc(db, 'room_codes', cleanRaw), codeDocData, { merge: true });
+                }
+                if (bmFormatted && bmFormatted !== codeRaw) {
+                  await setDoc(doc(db, 'room_codes', bmFormatted), codeDocData, { merge: true });
+                }
+              } catch (codeSaveErr) {
+                console.warn('[CloudFunctionsClient] Room code directory sync notice:', codeSaveErr);
+              }
+            }
+          }
 
           const playersCol = collection(db, 'matches', container.match.id, 'players');
           if (functionName === 'createMatch' || functionName === 'resetLobby') {

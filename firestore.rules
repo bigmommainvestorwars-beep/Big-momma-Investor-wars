@@ -139,6 +139,11 @@ service cloud.firestore {
       }
     }
 
+    // Dedicated Fast Room Code Directory (for direct O(1) cross-client lobby code lookups)
+    match /room_codes/{codeId} {
+      allow get, list, create, update, delete: if true;
+    }
+
     // Test & Diagnostic Connection Check
     match /test/{testId} {
       allow read: if true;
