@@ -632,10 +632,10 @@ export class CloudFunctionsClient {
     }
 
     const resolvedMatchId =
-      data.matchId ||
       (resultData as any)?.matchId ||
-      (resultData as any)?.id ||
       ((resultData as any)?.match?.id) ||
+      (resultData as any)?.id ||
+      (data.matchId && data.matchId !== 'matchmaking' && data.matchId !== 'system' ? data.matchId : undefined) ||
       (IS_TEST_ROOM_MODE && !data.matchId ? TEST_MATCH_ID : undefined);
 
     const container = resolvedMatchId ? authoritativeServerEngine.getMatchContainer(resolvedMatchId) : undefined;
