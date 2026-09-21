@@ -61,6 +61,7 @@ import { CosmeticsManager, EquippedCosmeticsState } from '../../../services/cosm
 export const LandscapeGameScreen: React.FC = () => {
   const {
     match,
+    activeMatchId,
     players,
     logs,
     activeAuction,
@@ -164,6 +165,8 @@ export const LandscapeGameScreen: React.FC = () => {
 
   // Identify Local Device Player vs Current Authoritative Active Player
   const myPlayer = useMemo(() => {
+    const isLocalSim = activeMatchId === 'local-simulation' || Boolean(activeMatchId?.startsWith('local-'));
+
     const currentUid =
       user?.uid ||
       (typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null);
@@ -171,7 +174,16 @@ export const LandscapeGameScreen: React.FC = () => {
       const found = players.find((p) => p.userId === currentUid || p.id === currentUid);
       if (found) return found;
     }
-    // Differentiate by explicit localRole
+
+    // For ONLINE MULTIPLAYER:
+    // myPlayer MUST resolve by the authoritative Firebase Auth UID.
+    // If no matching player exists, myPlayer must be null / unresolved.
+    // Never use players[0] as the identity fallback in an online match.
+    if (!isLocalSim) {
+      return null;
+    }
+
+    // Differentiate by explicit localRole for OFFLINE / LOCAL SIMULATION ONLY:
     if (localRole === 'guest') {
       const guest = players.find(
         (p) => match?.hostUserId ? (p.userId !== match.hostUserId && p.id !== match.hostUserId) : p !== players[0]
@@ -184,9 +196,9 @@ export const LandscapeGameScreen: React.FC = () => {
       );
       if (host) return host;
     }
-    // Fallback if solo bot match or spectator: first non-bot player or first player
+    // Fallback if solo bot match or spectator (LOCAL ONLY): first non-bot player or first player
     return players.find((p) => !p.isBot) || players[0] || null;
-  }, [players, user?.uid, localRole, match?.hostUserId]);
+  }, [players, user?.uid, localRole, match?.hostUserId, activeMatchId]);
 
   const currentPlayer = useMemo(() => {
     return players.find((p) => p.id === match?.currentPlayerId) || null;

@@ -45,7 +45,7 @@ export interface ServerResponseEnvelope<T = unknown> {
   };
 }
 
-const NETWORK_TIMEOUT_MS = 4000;
+const NETWORK_TIMEOUT_MS = 12000;
 
 let activeClientUser: { uid: string; displayName: string } | null = null;
 
@@ -241,23 +241,28 @@ export class CloudFunctionsClient {
         };
 
         if (db) {
-          await setDoc(doc(db, 'matches', newMatchId), matchDoc);
-          await setDoc(doc(db, 'matches', newMatchId, 'players', user.uid), hostPlayerDoc);
-          await setDoc(doc(db, 'room_codes', cleanCode), {
-            matchId: newMatchId,
-            code: cleanCode,
-            hostUserId: user.uid,
-            createdAt: Date.now(),
-          });
           const stripped = cleanCode.replace(/^BM-/, '');
-          if (stripped !== cleanCode) {
-            await setDoc(doc(db, 'room_codes', stripped), {
+          const writes: Promise<void>[] = [
+            setDoc(doc(db, 'matches', newMatchId), matchDoc),
+            setDoc(doc(db, 'matches', newMatchId, 'players', user.uid), hostPlayerDoc),
+            setDoc(doc(db, 'room_codes', cleanCode), {
               matchId: newMatchId,
               code: cleanCode,
               hostUserId: user.uid,
               createdAt: Date.now(),
-            });
+            }),
+          ];
+          if (stripped !== cleanCode) {
+            writes.push(
+              setDoc(doc(db, 'room_codes', stripped), {
+                matchId: newMatchId,
+                code: cleanCode,
+                hostUserId: user.uid,
+                createdAt: Date.now(),
+              })
+            );
           }
+          await Promise.all(writes);
         }
 
         return {

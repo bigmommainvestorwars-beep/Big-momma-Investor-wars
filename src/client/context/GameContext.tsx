@@ -6,8 +6,8 @@
  */
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
-import { getFirebaseFirestore } from '../../services/firebase/config';
+import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
+import { getFirebaseFirestore, getFirebaseAuth } from '../../services/firebase/config';
 import { GameState } from '../../types/game';
 import { ActionRequest } from '../../types/request';
 import { firestoreService } from '../../services/firebase/firestoreService';
@@ -169,6 +169,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Local device role: 'host' | 'guest' | 'unknown'
   const [localRole, setLocalRoleState] = useState<'host' | 'guest' | 'unknown'>(() => {
     if (typeof window !== 'undefined') {
+      const persisted = localStorage.getItem('investor_wars_local_role_persisted');
+      if (persisted === 'host' || persisted === 'guest') return persisted;
       const saved = sessionStorage.getItem('investor_wars_local_role');
       if (saved === 'host' || saved === 'guest') return saved;
     }
@@ -180,8 +182,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (typeof window !== 'undefined') {
       if (role === 'unknown') {
         sessionStorage.removeItem('investor_wars_local_role');
+        localStorage.removeItem('investor_wars_local_role_persisted');
       } else {
         sessionStorage.setItem('investor_wars_local_role', role);
+        localStorage.setItem('investor_wars_local_role_persisted', role);
       }
     }
   }, []);
@@ -206,23 +210,83 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (isCancelled) return;
 
           if (!matchSnap.exists()) {
-            try { localStorage.removeItem('bigmomma_active_match_id'); } catch {}
+            try {
+              localStorage.removeItem('bigmomma_active_match_id');
+              localStorage.removeItem('investor_wars_local_role_persisted');
+              sessionStorage.removeItem('investor_wars_local_role');
+            } catch {}
+            setLocalRole('unknown');
             return;
           }
 
           const matchData = matchSnap.data() as FirestoreMatchDoc;
           const isStale = (Date.now() - (matchData.updatedAt || matchData.createdAt || 0)) > 2 * 60 * 60 * 1000;
           if (matchData.status === 'completed' || matchData.status === 'abandoned' || (matchData as any).isDeleted || isStale) {
-            try { localStorage.removeItem('bigmomma_active_match_id'); } catch {}
+            try {
+              localStorage.removeItem('bigmomma_active_match_id');
+              localStorage.removeItem('investor_wars_local_role_persisted');
+              sessionStorage.removeItem('investor_wars_local_role');
+            } catch {}
+            setLocalRole('unknown');
             return;
           }
+
+          // Authoritative Player Identity & Participant Validation
+          const auth = getFirebaseAuth();
+          const currentUid = auth?.currentUser?.uid || user?.uid;
+          if (!currentUid) {
+            return;
+          }
+
+          // Query the match's players to verify participant identity
+          const playersSnap = await getDocs(collection(db, 'matches', storedMatchId, 'players'));
+          if (isCancelled) return;
+          const playerDocs = playersSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
+
+          const matchingPlayer = playerDocs.find((p) => p.id === currentUid || p.userId === currentUid);
+          const isListedInParticipants = Array.isArray(matchData.participantUserIds) && matchData.participantUserIds.includes(currentUid);
+
+          // If current UID does NOT match any existing player and is not in participantUserIds:
+          // do NOT silently assign the user to players[0].
+          // do NOT silently make them host.
+          // do NOT create a duplicate player.
+          // clear the stale activeMatchId and persisted role, and return to normal lobby/home state.
+          if (!matchingPlayer && !isListedInParticipants) {
+            console.warn('[SessionRecovery] Current user is not a participant of match', storedMatchId);
+            try {
+              localStorage.removeItem('bigmomma_active_match_id');
+              localStorage.removeItem('investor_wars_local_role_persisted');
+              sessionStorage.removeItem('investor_wars_local_role');
+            } catch {}
+            setLocalRole('unknown');
+            return;
+          }
+
+          // Restore persisted localRole with authoritative host verification
+          const persistedRole = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_local_role_persisted') : null;
+          const isAuthoritativeHost = Boolean(
+            matchData.hostUserId === currentUid ||
+            (playerDocs.length > 0 && playerDocs[0]?.id === currentUid)
+          );
+
+          let resolvedRole: 'host' | 'guest' = isAuthoritativeHost ? 'host' : 'guest';
+          if (persistedRole === 'host' && !isAuthoritativeHost) {
+            // Persisted role claims host, but authoritative match doc shows user is not host
+            resolvedRole = 'guest';
+          }
+          setLocalRole(resolvedRole);
 
           if (!activeMatchId) {
             setActiveMatchId(storedMatchId);
           }
         }
       } catch (err) {
-        try { localStorage.removeItem('bigmomma_active_match_id'); } catch {}
+        try {
+          localStorage.removeItem('bigmomma_active_match_id');
+          localStorage.removeItem('investor_wars_local_role_persisted');
+          sessionStorage.removeItem('investor_wars_local_role');
+        } catch {}
+        setLocalRole('unknown');
       }
     };
 
@@ -231,7 +295,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => {
       isCancelled = true;
     };
-  }, [isAuthLoading, isAuthenticated, activeMatchId]);
+  }, [isAuthLoading, isAuthenticated, activeMatchId, user?.uid, setLocalRole]);
 
   // Active Match Session Persistence
   useEffect(() => {
@@ -742,6 +806,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsActionPending(false);
       if (typeof window !== 'undefined') {
         localStorage.removeItem('bigmomma_active_match_id');
+        localStorage.removeItem('investor_wars_local_role_persisted');
         sessionStorage.removeItem('investor_wars_local_role');
       }
     }
