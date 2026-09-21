@@ -163,10 +163,10 @@ export const LandscapeGameScreen: React.FC = () => {
   // Selected space object
   const selectedSpace = DEFAULT_STANDARD_SPACES[selectedSpaceIndex] || DEFAULT_STANDARD_SPACES[0];
 
+  const isLocalSim = activeMatchId === 'local-simulation' || Boolean(activeMatchId?.startsWith('local-'));
+
   // Identify Local Device Player vs Current Authoritative Active Player
   const myPlayer = useMemo(() => {
-    const isLocalSim = activeMatchId === 'local-simulation' || Boolean(activeMatchId?.startsWith('local-'));
-
     const currentUid =
       user?.uid ||
       (typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null);
@@ -201,24 +201,31 @@ export const LandscapeGameScreen: React.FC = () => {
   }, [players, user?.uid, localRole, match?.hostUserId, activeMatchId]);
 
   const currentPlayer = useMemo(() => {
-    return players.find((p) => p.id === match?.currentPlayerId) || null;
+    if (!match?.currentPlayerId) return null;
+    return (
+      players.find((p) => p.id === match.currentPlayerId || (p.userId && p.userId === match.currentPlayerId)) || null
+    );
   }, [players, match?.currentPlayerId]);
 
   // Turn ownership flags:
   // Is it specifically THIS client device's turn?
-  const isMyTurn = Boolean(myPlayer && currentPlayer && myPlayer.id === currentPlayer.id);
+  const isMyTurn = Boolean(
+    myPlayer &&
+      currentPlayer &&
+      (myPlayer.id === currentPlayer.id ||
+        (Boolean(myPlayer.userId) && Boolean(currentPlayer.userId) && myPlayer.userId === currentPlayer.userId))
+  );
   const isOtherHumanTurn = Boolean(currentPlayer && !currentPlayer.isBot && !isMyTurn);
   const isBotTurn = Boolean(currentPlayer?.isBot);
 
   // Host detection (only the match host executes autonomous bot turns in multiplayer)
   const isHost = Boolean(
-    localRole === 'host' ||
-    (localRole !== 'guest' && (
-      !match?.hostUserId ||
-      match.hostUserId === user?.uid ||
-      match.hostUserId === myPlayer?.id ||
-      (players.length > 0 && players[0]?.id === (user?.uid || myPlayer?.id))
-    ))
+    isLocalSim
+      ? localRole === 'host' || players[0]?.id === (user?.uid || myPlayer?.id)
+      : match?.hostUserId &&
+          (match.hostUserId === user?.uid ||
+            match.hostUserId === myPlayer?.userId ||
+            match.hostUserId === myPlayer?.id)
   );
 
   // Phase analysis
