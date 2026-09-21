@@ -212,15 +212,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
    * before any protected multiplayer or lobby operation executes.
    */
   const ensureAuthenticatedUser = useCallback(async (forceTokenRefresh = false): Promise<User> => {
-    // 1. Wait for initial auth listener resolution with 1500ms safety timeout
+    if (!authService.isConfigured()) {
+      throw new Error('Firebase Authentication is not configured. Cloud multiplayer requires Firebase.');
+    }
+
+    // 1. Wait for initial auth listener resolution with 3000ms safety timeout
     await Promise.race([
       authReadyPromiseRef.current,
-      new Promise<void>((res) => setTimeout(res, 1500)),
+      new Promise<void>((res) => setTimeout(res, 3000)),
     ]);
 
-    // 2. Check current Firebase Auth instance
+    // 2. Check current live Firebase Auth instance
     const fbUser = authService.getCurrentUser();
-    if (fbUser) {
+    if (fbUser?.uid) {
       if (forceTokenRefresh) {
         setAuthStatus('AUTH_REAUTHENTICATING');
         await authService.getIdToken(true);
@@ -229,42 +233,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return fbUser;
     }
 
-    // 3. If in React state, verify
-    if (currentUser) {
-      return currentUser;
-    }
-
-    // 4. If unauthenticated in Firebase, auto-authenticate anonymously for seamless lobby participation
+    // 3. If unauthenticated in Firebase, auto-authenticate anonymously for seamless lobby participation
     setAuthStatus('AUTHENTICATING');
     try {
-      if (authService.isConfigured()) {
-        const anonUser = await authService.signInAnonymously();
-        setCurrentUser(anonUser);
-        setAuthStatus('AUTHENTICATED');
-        return anonUser;
+      const anonUser = await authService.signInAnonymously();
+      const storedName = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_name') : null;
+      let dName = storedName || anonUser.displayName || 'Investor';
+      if (dName && dName !== anonUser.displayName) {
+        try {
+          await authService.updateCurrentUserProfile(dName);
+        } catch {}
       }
-    } catch (anonErr) {
-      console.warn('[AuthContext] Anonymous auth fallback note:', anonErr);
+      const resolvedAnon: User = { ...anonUser, displayName: dName };
+      setCurrentUser(resolvedAnon);
+      setAuthStatus('AUTHENTICATED');
+      setAuthError(null);
+      setActiveClientUser({ uid: resolvedAnon.uid, displayName: dName });
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('investor_wars_client_uid', resolvedAnon.uid);
+        localStorage.setItem('investor_wars_client_name', dName);
+        localStorage.setItem('investor_wars_persisted_user', JSON.stringify(resolvedAnon));
+      }
+      return resolvedAnon;
+    } catch (anonErr: any) {
+      setAuthStatus('AUTH_ERROR');
+      const errMessage = anonErr instanceof Error ? anonErr.message : String(anonErr);
+      setAuthError(errMessage);
+      throw anonErr;
     }
-
-    // 5. Fallback quick investor profile
-    const storedUid = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null;
-    const uid = storedUid || `investor_${Math.random().toString(36).substring(2, 8)}`;
-    const dName = typeof window !== 'undefined' ? (localStorage.getItem('investor_wars_client_name') || 'Investor') : 'Investor';
-    const fallbackUser: User = {
-      uid,
-      email: `${uid}@investorwars.dev`,
-      displayName: dName,
-      photoURL: null,
-      emailVerified: true,
-      createdAt: Date.now(),
-      lastLoginAt: Date.now(),
-    };
-    setCurrentUser(fallbackUser);
-    setAuthStatus('AUTHENTICATED');
-    setActiveClientUser({ uid: fallbackUser.uid, displayName: dName });
-    return fallbackUser;
-  }, [currentUser]);
+  }, []);
 
   const getIdToken = useCallback(async (forceRefresh = false): Promise<string | null> => {
     return authService.getIdToken(forceRefresh);

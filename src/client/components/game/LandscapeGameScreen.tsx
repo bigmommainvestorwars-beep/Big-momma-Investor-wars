@@ -220,6 +220,29 @@ export const LandscapeGameScreen: React.FC = () => {
   const canEndTurn =
     isMyTurn && (currentPhase === 'TURN_END' || currentPhase === 'AWAITING_ACTION');
 
+  // Dynamic cross-client turn status text for non-active observing human players
+  const otherHumanStatusText = useMemo(() => {
+    if (!isOtherHumanTurn) return undefined;
+    const name = currentPlayer?.displayName || 'Opponent';
+    const hasAlreadyRolled = Boolean(
+      match?.lastRoll && match?.lastRollPlayerId === currentPlayer?.id
+    );
+
+    if ((currentPhase === 'TURN_START' || currentPhase === 'AWAITING_ROLL') && !hasAlreadyRolled) {
+      return `Waiting for ${name} to roll...`;
+    }
+    if (currentPhase === 'AWAITING_ACTION') {
+      return `${name} is deciding on property action...`;
+    }
+    if (currentPhase === 'TURN_END') {
+      return `${name} is finishing their turn...`;
+    }
+    if (hasAlreadyRolled) {
+      return `${name} is finishing action...`;
+    }
+    return `Waiting for ${name}...`;
+  }, [isOtherHumanTurn, currentPlayer?.displayName, currentPlayer?.id, match?.lastRoll, match?.lastRollPlayerId, currentPhase]);
+
   // Ownership of selected space
   const selectedSpaceOwner = players.find((p) =>
     (p.ownedSpaceIds || []).includes(selectedSpace.id)
@@ -776,7 +799,7 @@ export const LandscapeGameScreen: React.FC = () => {
                     isBotTurn
                       ? `${currentPlayer?.displayName || 'AI'} is computing move...`
                       : isOtherHumanTurn
-                      ? `Waiting for ${currentPlayer?.displayName || 'opponent'} to roll...`
+                      ? otherHumanStatusText
                       : currentPhase !== 'TURN_START' &&
                         currentPhase !== 'AWAITING_ROLL' &&
                         currentPhase !== 'ROLL_OR_ACTION'

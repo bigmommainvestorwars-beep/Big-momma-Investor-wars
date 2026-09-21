@@ -132,30 +132,47 @@ export class CloudFunctionsClient {
   private getEffectiveUser(payload?: any): { uid: string; displayName: string } {
     const auth = getFirebaseAuth();
     const p = payload || {};
+
+    // 1. Explicit bot identifier
+    if (p.botId) {
+      return {
+        uid: p.botId,
+        displayName: p.displayName || p.botName || 'AI Bot',
+      };
+    }
+
+    if (p.actingPlayerId && (p.actingPlayerId.startsWith('bot_') || p.actingPlayerId.startsWith('fill_bot_'))) {
+      return {
+        uid: p.actingPlayerId,
+        displayName: p.displayName || 'AI Bot',
+      };
+    }
+
+    // 2. Real Firebase Auth currentUser is strictly AUTHORITATIVE for all cloud multiplayer operations
+    const authUser = auth?.currentUser;
+    if (authUser?.uid) {
+      const storedName = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_name') : null;
+      const displayName =
+        authUser.displayName ||
+        activeClientUser?.displayName ||
+        storedName ||
+        (authUser.email ? authUser.email.split('@')[0] : 'Investor');
+      return { uid: authUser.uid, displayName };
+    }
+
+    // 3. Fallback for local simulation mode or non-cloud contexts
+    if (activeClientUser?.uid) {
+      return {
+        uid: activeClientUser.uid,
+        displayName: activeClientUser.displayName || 'Investor',
+      };
+    }
+
     const storedUid = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null;
     const storedName = typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_name') : null;
 
-    const uid =
-      p.actingPlayerId ||
-      p.botId ||
-      auth?.currentUser?.uid ||
-      activeClientUser?.uid ||
-      storedUid ||
-      `user_${Math.random().toString(36).substring(2, 8)}`;
-
-    const displayName =
-      p.displayName ||
-      auth?.currentUser?.displayName ||
-      activeClientUser?.displayName ||
-      storedName ||
-      (auth?.currentUser?.email ? auth.currentUser.email.split('@')[0] : 'Investor');
-
-    if (typeof window !== 'undefined' && !storedUid) {
-      localStorage.setItem('investor_wars_client_uid', uid);
-    }
-    if (typeof window !== 'undefined' && !storedName) {
-      localStorage.setItem('investor_wars_client_name', displayName);
-    }
+    const uid = storedUid || `investor_${Math.random().toString(36).substring(2, 8)}`;
+    const displayName = storedName || 'Investor';
 
     return { uid, displayName };
   }
@@ -166,8 +183,19 @@ export class CloudFunctionsClient {
   ): Promise<TRes> {
     const db = getFirebaseFirestore();
     const p = (data.payload || {}) as Record<string, any>;
-    const user = this.getEffectiveUser(p);
     const matchId = data.matchId;
+
+    const isLocalSim = matchId === 'local-simulation' || Boolean(matchId?.startsWith('local-'));
+    if (!isLocalSim && functionName !== 'healthCheck') {
+      const auth = getFirebaseAuth();
+      if (!auth?.currentUser?.uid) {
+        const customErr: any = new Error('Authentication required for cloud multiplayer. Please wait for sign-in.');
+        customErr.code = 'unauthenticated';
+        throw customErr;
+      }
+    }
+
+    const user = this.getEffectiveUser(p);
 
     switch (functionName) {
       case 'createMatch': {
@@ -341,24 +369,20 @@ export class CloudFunctionsClient {
         let matchedAccessCode = `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
         if (db && !p.isPrivate) {
-          try {
-            const matchesCol = collection(db, 'matches');
-            const q = query(matchesCol, where('status', '==', 'waiting_for_players'), limit(10));
-            const snap = await getDocs(q);
+          const matchesCol = collection(db, 'matches');
+          const q = query(matchesCol, where('status', '==', 'waiting_for_players'), limit(10));
+          const snap = await getDocs(q);
 
-            for (const docSnap of snap.docs) {
-              const mData = docSnap.data() as FirestoreMatchDoc;
-              if (mData.isPrivate) continue;
+          for (const docSnap of snap.docs) {
+            const mData = docSnap.data() as FirestoreMatchDoc;
+            if (mData.isPrivate) continue;
 
-              const participants = Array.isArray(mData.participantUserIds) ? mData.participantUserIds : [];
-              if (participants.includes(user.uid) || participants.length < 2) {
-                matchedMatchId = docSnap.id;
-                matchedAccessCode = mData.accessCode || matchedAccessCode;
-                break;
-              }
+            const participants = Array.isArray(mData.participantUserIds) ? mData.participantUserIds : [];
+            if (participants.includes(user.uid) || participants.length < 2) {
+              matchedMatchId = docSnap.id;
+              matchedAccessCode = mData.accessCode || matchedAccessCode;
+              break;
             }
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:findOrCreateQuickMatch] Query note:', err);
           }
         }
 
@@ -382,18 +406,14 @@ export class CloudFunctionsClient {
             lastActiveAt: Date.now(),
           };
 
-          try {
-            await setDoc(doc(db, 'matches', matchedMatchId, 'players', user.uid), guestPlayer, { merge: true });
-            const mSnap = await getDoc(doc(db, 'matches', matchedMatchId));
-            const currentParts = (mSnap.data()?.participantUserIds as string[]) || [];
-            const updated = Array.from(new Set([...currentParts, user.uid]));
-            await updateDoc(doc(db, 'matches', matchedMatchId), {
-              participantUserIds: updated,
-              updatedAt: Date.now(),
-            });
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:findOrCreateQuickMatch] Join write note:', err);
-          }
+          await setDoc(doc(db, 'matches', matchedMatchId, 'players', user.uid), guestPlayer, { merge: true });
+          const mSnap = await getDoc(doc(db, 'matches', matchedMatchId));
+          const currentParts = (mSnap.data()?.participantUserIds as string[]) || [];
+          const updated = Array.from(new Set([...currentParts, user.uid]));
+          await updateDoc(doc(db, 'matches', matchedMatchId), {
+            participantUserIds: updated,
+            updatedAt: Date.now(),
+          });
 
           return {
             matchId: matchedMatchId,
@@ -424,34 +444,30 @@ export class CloudFunctionsClient {
         };
 
         if (db) {
-          try {
-            await setDoc(doc(db, 'matches', newMatchId), {
-              id: newMatchId,
-              hostUserId: user.uid,
-              boardId: 'default-standard-board',
-              rulesetVersion: '1.0.0',
-              status: 'waiting_for_players',
-              currentPhase: 'LOBBY',
-              currentPlayerId: user.uid,
-              turnNumber: 0,
-              roundNumber: 0,
-              stateVersion: 1,
-              participantUserIds: [user.uid],
-              accessCode: matchedAccessCode,
-              isPrivate: false,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            });
-            await setDoc(doc(db, 'matches', newMatchId, 'players', user.uid), hostPlayerDoc);
-            await setDoc(doc(db, 'room_codes', matchedAccessCode), {
-              matchId: newMatchId,
-              code: matchedAccessCode,
-              hostUserId: user.uid,
-              createdAt: Date.now(),
-            });
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:findOrCreateQuickMatch] Create write note:', err);
-          }
+          await setDoc(doc(db, 'matches', newMatchId), {
+            id: newMatchId,
+            hostUserId: user.uid,
+            boardId: 'default-standard-board',
+            rulesetVersion: '1.0.0',
+            status: 'waiting_for_players',
+            currentPhase: 'LOBBY',
+            currentPlayerId: user.uid,
+            turnNumber: 0,
+            roundNumber: 0,
+            stateVersion: 1,
+            participantUserIds: [user.uid],
+            accessCode: matchedAccessCode,
+            isPrivate: false,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+          await setDoc(doc(db, 'matches', newMatchId, 'players', user.uid), hostPlayerDoc);
+          await setDoc(doc(db, 'room_codes', matchedAccessCode), {
+            matchId: newMatchId,
+            code: matchedAccessCode,
+            hostUserId: user.uid,
+            createdAt: Date.now(),
+          });
         }
 
         return {
@@ -484,18 +500,14 @@ export class CloudFunctionsClient {
         };
 
         if (db) {
-          try {
-            await setDoc(doc(db, 'matches', matchId, 'players', user.uid), guestPlayer, { merge: true });
-            const mSnap = await getDoc(doc(db, 'matches', matchId));
-            const currentParts = (mSnap.data()?.participantUserIds as string[]) || [];
-            const updated = Array.from(new Set([...currentParts, user.uid]));
-            await updateDoc(doc(db, 'matches', matchId), {
-              participantUserIds: updated,
-              updatedAt: Date.now(),
-            });
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:joinMatch] write note:', err);
-          }
+          await setDoc(doc(db, 'matches', matchId, 'players', user.uid), guestPlayer, { merge: true });
+          const mSnap = await getDoc(doc(db, 'matches', matchId));
+          const currentParts = (mSnap.data()?.participantUserIds as string[]) || [];
+          const updated = Array.from(new Set([...currentParts, user.uid]));
+          await updateDoc(doc(db, 'matches', matchId), {
+            participantUserIds: updated,
+            updatedAt: Date.now(),
+          });
         }
 
         return { matchId, player: guestPlayer } as TRes;
@@ -529,59 +541,55 @@ export class CloudFunctionsClient {
 
         let newSpace = total;
         if (db) {
-          try {
-            const pDocRef = doc(db, 'matches', matchId, 'players', user.uid);
-            const pSnap = await getDoc(pDocRef);
-            const curSpace = (pSnap.data()?.currentSpaceIndex as number) || 0;
-            newSpace = (curSpace + total) % 52;
-            const passedGo = curSpace + total >= 52;
+          const pDocRef = doc(db, 'matches', matchId, 'players', user.uid);
+          const pSnap = await getDoc(pDocRef);
+          const curSpace = (pSnap.data()?.currentSpaceIndex as number) || 0;
+          newSpace = (curSpace + total) % 52;
+          const passedGo = curSpace + total >= 52;
 
-            const pData = pSnap.data() as FirestorePlayerDoc;
-            const newCash = (pData?.cash ?? 1500) + (passedGo ? 200 : 0);
-            const newNetWorth = (pData?.netWorth ?? 1500) + (passedGo ? 200 : 0);
+          const pData = pSnap.data() as FirestorePlayerDoc;
+          const newCash = (pData?.cash ?? 1500) + (passedGo ? 200 : 0);
+          const newNetWorth = (pData?.netWorth ?? 1500) + (passedGo ? 200 : 0);
 
-            await updateDoc(pDocRef, {
-              currentSpaceIndex: newSpace,
-              cash: newCash,
-              netWorth: newNetWorth,
-              lastActiveAt: Date.now(),
-            });
+          await updateDoc(pDocRef, {
+            currentSpaceIndex: newSpace,
+            cash: newCash,
+            netWorth: newNetWorth,
+            lastActiveAt: Date.now(),
+          });
 
-            const targetSpace = DEFAULT_STANDARD_SPACES[newSpace] || {
-              id: `space_${newSpace}`,
-              index: newSpace,
-              name: `Space ${newSpace}`,
-              type: 'rest',
-            };
+          const targetSpace = DEFAULT_STANDARD_SPACES[newSpace] || {
+            id: `space_${newSpace}`,
+            index: newSpace,
+            name: `Space ${newSpace}`,
+            type: 'rest',
+          };
 
-            let nextPhase = 'TURN_END';
-            if (targetSpace.type === 'property' || targetSpace.type === 'company') {
-              const pAllSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
-              const allPlayers = pAllSnap.docs.map((d) => d.data() as FirestorePlayerDoc);
-              const isOwned = allPlayers.some((pl) => (pl.ownedSpaceIds || []).includes(targetSpace.id));
-              if (!isOwned) {
-                nextPhase = 'AWAITING_ACTION';
-              }
+          let nextPhase = 'TURN_END';
+          if (targetSpace.type === 'property' || targetSpace.type === 'company') {
+            const pAllSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
+            const allPlayers = pAllSnap.docs.map((d) => d.data() as FirestorePlayerDoc);
+            const isOwned = allPlayers.some((pl) => (pl.ownedSpaceIds || []).includes(targetSpace.id));
+            if (!isOwned) {
+              nextPhase = 'AWAITING_ACTION';
             }
-
-            await updateDoc(doc(db, 'matches', matchId), {
-              lastRoll: [d1, d2],
-              lastRollPlayerId: user.uid,
-              currentPhase: nextPhase,
-              updatedAt: Date.now(),
-            });
-
-            await addDoc(collection(db, 'matches', matchId, 'logs'), {
-              id: `log_${Date.now()}`,
-              type: 'DICE_ROLLED',
-              playerId: user.uid,
-              playerName: user.displayName,
-              message: `${user.displayName} rolled a ${total} (${d1}+${d2}) and advanced to ${targetSpace.name}.${passedGo ? ' Collected 200 ƁM passing START.' : ''}`,
-              timestamp: Date.now(),
-            });
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:requestRoll] roll update note:', err);
           }
+
+          await updateDoc(doc(db, 'matches', matchId), {
+            lastRoll: [d1, d2],
+            lastRollPlayerId: user.uid,
+            currentPhase: nextPhase,
+            updatedAt: Date.now(),
+          });
+
+          await addDoc(collection(db, 'matches', matchId, 'logs'), {
+            id: `log_${Date.now()}`,
+            type: 'DICE_ROLLED',
+            playerId: user.uid,
+            playerName: user.displayName,
+            message: `${user.displayName} rolled a ${total} (${d1}+${d2}) and advanced to ${targetSpace.name}.${passedGo ? ' Collected 200 ƁM passing START.' : ''}`,
+            timestamp: Date.now(),
+          });
         }
 
         return { roll: total, newSpace } as TRes;
@@ -590,47 +598,43 @@ export class CloudFunctionsClient {
       case 'completeTurn': {
         if (!matchId) throw new Error('Match ID required');
         if (db) {
-          try {
-            const mDocRef = doc(db, 'matches', matchId);
-            const mSnap = await getDoc(mDocRef);
-            const mData = mSnap.data() as FirestoreMatchDoc;
+          const mDocRef = doc(db, 'matches', matchId);
+          const mSnap = await getDoc(mDocRef);
+          const mData = mSnap.data() as FirestoreMatchDoc;
 
-            const pSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
-            const pDocs = pSnap.docs
-              .map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc))
-              .filter((pl) => pl.status === 'active' || pl.status === 'disconnected');
-            pDocs.sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+          const pSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
+          const pDocs = pSnap.docs
+            .map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc))
+            .filter((pl) => pl.status === 'active' || pl.status === 'disconnected');
+          pDocs.sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
 
-            const curIdx = pDocs.findIndex((pl) => pl.id === mData.currentPlayerId);
-            const nextIdx = curIdx >= 0 ? (curIdx + 1) % pDocs.length : 0;
-            const nextPlayer = pDocs[nextIdx] || pDocs[0];
+          const curIdx = pDocs.findIndex((pl) => pl.id === mData.currentPlayerId);
+          const nextIdx = curIdx >= 0 ? (curIdx + 1) % pDocs.length : 0;
+          const nextPlayer = pDocs[nextIdx] || pDocs[0];
 
-            const newTurn = (mData.turnNumber || 0) + 1;
-            const newRound = Math.floor(newTurn / Math.max(1, pDocs.length)) + 1;
+          const newTurn = (mData.turnNumber || 0) + 1;
+          const newRound = Math.floor(newTurn / Math.max(1, pDocs.length)) + 1;
 
-            await updateDoc(mDocRef, {
-              currentPlayerId: nextPlayer ? nextPlayer.id : user.uid,
-              turnNumber: newTurn,
-              roundNumber: newRound,
-              currentPhase: 'TURN_START',
-              lastRoll: null,
-              lastRollPlayerId: null,
-              updatedAt: Date.now(),
-              stateVersion: (mData.stateVersion || 1) + 1,
+          await updateDoc(mDocRef, {
+            currentPlayerId: nextPlayer ? nextPlayer.id : user.uid,
+            turnNumber: newTurn,
+            roundNumber: newRound,
+            currentPhase: 'TURN_START',
+            lastRoll: null,
+            lastRollPlayerId: null,
+            updatedAt: Date.now(),
+            stateVersion: (mData.stateVersion || 1) + 1,
+          });
+
+          if (nextPlayer) {
+            await addDoc(collection(db, 'matches', matchId, 'logs'), {
+              id: `log_${Date.now()}`,
+              type: 'TURN_CHANGED',
+              playerId: nextPlayer.id,
+              playerName: nextPlayer.displayName,
+              message: `Turn passed to ${nextPlayer.displayName} (Round ${newRound}).`,
+              timestamp: Date.now(),
             });
-
-            if (nextPlayer) {
-              await addDoc(collection(db, 'matches', matchId, 'logs'), {
-                id: `log_${Date.now()}`,
-                type: 'TURN_CHANGED',
-                playerId: nextPlayer.id,
-                playerName: nextPlayer.displayName,
-                message: `Turn passed to ${nextPlayer.displayName} (Round ${newRound}).`,
-                timestamp: Date.now(),
-              });
-            }
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:completeTurn] update note:', err);
           }
         }
         return { success: true } as TRes;
@@ -639,36 +643,32 @@ export class CloudFunctionsClient {
       case 'buyProperty': {
         if (!matchId) throw new Error('Match ID required');
         if (db) {
-          try {
-            const pDocRef = doc(db, 'matches', matchId, 'players', user.uid);
-            const pSnap = await getDoc(pDocRef);
-            const pData = pSnap.data() as FirestorePlayerDoc;
-            const spaceId = `space_${pData.currentSpaceIndex}`;
-            const owned = pData.ownedSpaceIds || [];
+          const pDocRef = doc(db, 'matches', matchId, 'players', user.uid);
+          const pSnap = await getDoc(pDocRef);
+          const pData = pSnap.data() as FirestorePlayerDoc;
+          const spaceId = `space_${pData.currentSpaceIndex}`;
+          const owned = pData.ownedSpaceIds || [];
 
-            if (!owned.includes(spaceId)) {
-              await updateDoc(pDocRef, {
-                ownedSpaceIds: [...owned, spaceId],
-                cash: Math.max(0, (pData.cash || 1500) - 200),
-                lastActiveAt: Date.now(),
-              });
+          if (!owned.includes(spaceId)) {
+            await updateDoc(pDocRef, {
+              ownedSpaceIds: [...owned, spaceId],
+              cash: Math.max(0, (pData.cash ?? 1500) - 150),
+              lastActiveAt: Date.now(),
+            });
 
-              await updateDoc(doc(db, 'matches', matchId), {
-                currentPhase: 'TURN_END',
-                updatedAt: Date.now(),
-              });
+            await updateDoc(doc(db, 'matches', matchId), {
+              currentPhase: 'TURN_END',
+              updatedAt: Date.now(),
+            });
 
-              await addDoc(collection(db, 'matches', matchId, 'logs'), {
-                id: `log_${Date.now()}`,
-                type: 'PROPERTY_BOUGHT',
-                playerId: user.uid,
-                playerName: user.displayName,
-                message: `${user.displayName} acquired asset #${pData.currentSpaceIndex}.`,
-                timestamp: Date.now(),
-              });
-            }
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:buyProperty] note:', err);
+            await addDoc(collection(db, 'matches', matchId, 'logs'), {
+              id: `log_${Date.now()}`,
+              type: 'PROPERTY_BOUGHT',
+              playerId: user.uid,
+              playerName: user.displayName,
+              message: `${user.displayName} acquired asset #${pData.currentSpaceIndex}.`,
+              timestamp: Date.now(),
+            });
           }
         }
         return { success: true } as TRes;
