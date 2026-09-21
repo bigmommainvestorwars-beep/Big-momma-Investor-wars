@@ -217,7 +217,8 @@ export const LandscapeGameScreen: React.FC = () => {
       currentPhase === 'AWAITING_ROLL' ||
       currentPhase === 'ROLL_OR_ACTION');
   const canActOnProperty = isMyTurn && currentPhase === 'AWAITING_ACTION';
-  const canEndTurn = isMyTurn && currentPhase === 'TURN_END';
+  const canEndTurn =
+    isMyTurn && (currentPhase === 'TURN_END' || currentPhase === 'AWAITING_ACTION');
 
   // Ownership of selected space
   const selectedSpaceOwner = players.find((p) =>

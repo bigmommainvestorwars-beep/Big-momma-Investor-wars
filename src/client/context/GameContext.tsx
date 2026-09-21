@@ -26,6 +26,7 @@ import { BotRunnerService } from '../../bot/botRunnerService';
 import { PRESET_BOT_PROFILES } from '../../bot/botTypes';
 import { PendingMarketChoiceDoc, MarketEvent } from '../../types/marketEvent';
 import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../config/testRoomConfig';
+import { DEFAULT_STANDARD_SPACES } from '../../config/boardConfig';
 
 export interface GameContextValue {
   // Matches state
@@ -898,14 +899,46 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (activeMatchId === 'local-simulation' || activeMatchId.startsWith('local-')) {
         let newSpace = total;
+        let isPurchasable = false;
+
         setPlayers((prev) => {
           const currentP = prev.find((p) => p.id === match?.currentPlayerId) || prev[0];
           if (!currentP) return prev;
           newSpace = ((currentP.currentSpaceIndex || 0) + total) % 52;
+          const passedGo = (currentP.currentSpaceIndex || 0) + total >= 52;
+
+          const targetSpace = DEFAULT_STANDARD_SPACES[newSpace] || {
+            id: `space_${newSpace}`,
+            index: newSpace,
+            name: `Space ${newSpace}`,
+            type: 'rest',
+          };
+
+          const owner = prev.find((pl) => (pl.ownedSpaceIds || []).includes(targetSpace.id));
+          isPurchasable = (targetSpace.type === 'property' || targetSpace.type === 'company') && !owner;
+
           return prev.map((p) =>
-            p.id === currentP.id ? { ...p, currentSpaceIndex: newSpace, lastActiveAt: Date.now() } : p
+            p.id === currentP.id
+              ? {
+                  ...p,
+                  currentSpaceIndex: newSpace,
+                  cash: p.cash + (passedGo ? 200 : 0),
+                  netWorth: p.netWorth + (passedGo ? 200 : 0),
+                  lastActiveAt: Date.now(),
+                }
+              : p
           );
         });
+
+        const targetSpace = DEFAULT_STANDARD_SPACES[newSpace] || {
+          id: `space_${newSpace}`,
+          index: newSpace,
+          name: `Space ${newSpace}`,
+          type: 'rest',
+        };
+
+        const owner = players.find((pl) => (pl.ownedSpaceIds || []).includes(targetSpace.id));
+        const nextPhase = (targetSpace.type === 'property' || targetSpace.type === 'company') && !owner ? 'AWAITING_ACTION' : 'TURN_END';
 
         setMatch((prev) =>
           prev
@@ -913,7 +946,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 ...prev,
                 lastRoll: [d1, d2],
                 lastRollPlayerId: prev.currentPlayerId || undefined,
-                currentPhase: 'LANDED_SPACE',
+                currentPhase: nextPhase,
                 stateVersion: (prev.stateVersion || 1) + 1,
                 updatedAt: Date.now(),
               }
@@ -926,7 +959,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             id: `log_${Date.now()}`,
             type: 'DICE_ROLLED',
             sourcePlayerId: curP?.id,
-            summary: `${curP?.displayName || 'Player'} rolled ${total} (${d1}+${d2}) and advanced to space #${newSpace}.`,
+            summary: `${curP?.displayName || 'Player'} rolled ${total} (${d1}+${d2}) and advanced to ${targetSpace.name}.`,
             timestamp: Date.now(),
           },
           ...prev,

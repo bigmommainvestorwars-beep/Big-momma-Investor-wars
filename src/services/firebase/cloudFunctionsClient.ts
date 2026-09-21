@@ -21,6 +21,7 @@ import {
 import { getFirebaseAuth, getFirebaseFirestore } from './config';
 import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../config/testRoomConfig';
 import { FirestoreMatchDoc, FirestorePlayerDoc } from './matchSyncService';
+import { DEFAULT_STANDARD_SPACES } from '../../config/boardConfig';
 
 export interface ServerRequestEnvelope<T = unknown> {
   matchId: string;
@@ -212,26 +213,22 @@ export class CloudFunctionsClient {
         };
 
         if (db) {
-          try {
-            await setDoc(doc(db, 'matches', newMatchId), matchDoc);
-            await setDoc(doc(db, 'matches', newMatchId, 'players', user.uid), hostPlayerDoc);
-            await setDoc(doc(db, 'room_codes', cleanCode), {
+          await setDoc(doc(db, 'matches', newMatchId), matchDoc);
+          await setDoc(doc(db, 'matches', newMatchId, 'players', user.uid), hostPlayerDoc);
+          await setDoc(doc(db, 'room_codes', cleanCode), {
+            matchId: newMatchId,
+            code: cleanCode,
+            hostUserId: user.uid,
+            createdAt: Date.now(),
+          });
+          const stripped = cleanCode.replace(/^BM-/, '');
+          if (stripped !== cleanCode) {
+            await setDoc(doc(db, 'room_codes', stripped), {
               matchId: newMatchId,
               code: cleanCode,
               hostUserId: user.uid,
               createdAt: Date.now(),
             });
-            const stripped = cleanCode.replace(/^BM-/, '');
-            if (stripped !== cleanCode) {
-              await setDoc(doc(db, 'room_codes', stripped), {
-                matchId: newMatchId,
-                code: cleanCode,
-                hostUserId: user.uid,
-                createdAt: Date.now(),
-              });
-            }
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:createMatch] Firestore note:', err);
           }
         }
 
@@ -249,75 +246,71 @@ export class CloudFunctionsClient {
         let matchData: FirestoreMatchDoc | null = null;
 
         if (db) {
-          try {
-            const codeSnap = await getDoc(doc(db, 'room_codes', cleanCode));
-            if (codeSnap.exists()) {
-              targetMatchId = codeSnap.data()?.matchId;
-            }
+          const codeSnap = await getDoc(doc(db, 'room_codes', cleanCode));
+          if (codeSnap.exists()) {
+            targetMatchId = codeSnap.data()?.matchId;
+          }
 
-            if (!targetMatchId) {
-              const altCode = cleanCode.startsWith('BM-') ? cleanCode.replace('BM-', '') : `BM-${cleanCode}`;
-              const altSnap = await getDoc(doc(db, 'room_codes', altCode));
-              if (altSnap.exists()) {
-                targetMatchId = altSnap.data()?.matchId;
+          if (!targetMatchId) {
+            const altCode = cleanCode.startsWith('BM-') ? cleanCode.replace('BM-', '') : `BM-${cleanCode}`;
+            const altSnap = await getDoc(doc(db, 'room_codes', altCode));
+            if (altSnap.exists()) {
+              targetMatchId = altSnap.data()?.matchId;
+            }
+          }
+
+          if (!targetMatchId) {
+            const q1 = query(collection(db, 'matches'), where('accessCode', '==', cleanCode), limit(1));
+            const q1Snap = await getDocs(q1);
+            if (!q1Snap.empty) {
+              targetMatchId = q1Snap.docs[0].id;
+              matchData = { id: targetMatchId, ...q1Snap.docs[0].data() } as FirestoreMatchDoc;
+            }
+          }
+
+          if (targetMatchId) {
+            if (!matchData) {
+              const mSnap = await getDoc(doc(db, 'matches', targetMatchId));
+              if (mSnap.exists()) {
+                matchData = { id: mSnap.id, ...mSnap.data() } as FirestoreMatchDoc;
               }
             }
 
-            if (!targetMatchId) {
-              const q1 = query(collection(db, 'matches'), where('accessCode', '==', cleanCode), limit(1));
-              const q1Snap = await getDocs(q1);
-              if (!q1Snap.empty) {
-                targetMatchId = q1Snap.docs[0].id;
-                matchData = { id: targetMatchId, ...q1Snap.docs[0].data() } as FirestoreMatchDoc;
-              }
-            }
+            const pSnap = await getDocs(collection(db, 'matches', targetMatchId, 'players'));
+            const currentPlayers = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
+            const existingPlayer = currentPlayers.find((pl) => pl.id === user.uid || pl.userId === user.uid);
 
-            if (targetMatchId) {
-              if (!matchData) {
-                const mSnap = await getDoc(doc(db, 'matches', targetMatchId));
-                if (mSnap.exists()) {
-                  matchData = { id: mSnap.id, ...mSnap.data() } as FirestoreMatchDoc;
-                }
-              }
+            const guestPlayer: FirestorePlayerDoc = existingPlayer || {
+              id: user.uid,
+              userId: user.uid,
+              displayName: user.displayName,
+              currentSpaceIndex: 0,
+              status: 'active',
+              turnOrder: currentPlayers.length,
+              netWorth: 1500,
+              cash: 1500,
+              specialPoints: 50,
+              ownedSpaceIds: [],
+              mortgagedSpaceIds: [],
+              companyShareIds: [],
+              modifierIds: [],
+              isBot: false,
+              connected: true,
+              lastActiveAt: Date.now(),
+            };
 
-              const pSnap = await getDocs(collection(db, 'matches', targetMatchId, 'players'));
-              const currentPlayers = pSnap.docs.map((d) => ({ id: d.id, ...d.data() })) as FirestorePlayerDoc[];
-              const existingPlayer = currentPlayers.find((pl) => pl.id === user.uid || pl.userId === user.uid);
+            await setDoc(doc(db, 'matches', targetMatchId, 'players', user.uid), guestPlayer, { merge: true });
 
-              const guestPlayer: FirestorePlayerDoc = existingPlayer || {
-                id: user.uid,
-                userId: user.uid,
-                displayName: user.displayName,
-                currentSpaceIndex: 0,
-                status: 'active',
-                turnOrder: currentPlayers.length,
-                netWorth: 1500,
-                cash: 1500,
-                specialPoints: 50,
-                ownedSpaceIds: [],
-                mortgagedSpaceIds: [],
-                companyShareIds: [],
-                modifierIds: [],
-                isBot: false,
-                connected: true,
-                lastActiveAt: Date.now(),
-              };
+            const updatedParticipants = Array.from(new Set([...(matchData?.participantUserIds || []), user.uid]));
+            await updateDoc(doc(db, 'matches', targetMatchId), {
+              participantUserIds: updatedParticipants,
+              updatedAt: Date.now(),
+            });
 
-              await setDoc(doc(db, 'matches', targetMatchId, 'players', user.uid), guestPlayer, { merge: true });
-
-              const updatedParticipants = Array.from(new Set([...(matchData?.participantUserIds || []), user.uid]));
-              await updateDoc(doc(db, 'matches', targetMatchId), {
-                participantUserIds: updatedParticipants,
-                updatedAt: Date.now(),
-              });
-
-              return {
-                matchId: targetMatchId,
-                player: guestPlayer,
-              } as TRes;
-            }
-          } catch (err) {
-            console.warn('[CloudFunctionsClient:joinMatchByAccessCode] Firestore note:', err);
+            return {
+              matchId: targetMatchId,
+              player: guestPlayer,
+            } as TRes;
           }
         }
 
@@ -541,16 +534,40 @@ export class CloudFunctionsClient {
             const pSnap = await getDoc(pDocRef);
             const curSpace = (pSnap.data()?.currentSpaceIndex as number) || 0;
             newSpace = (curSpace + total) % 52;
+            const passedGo = curSpace + total >= 52;
+
+            const pData = pSnap.data() as FirestorePlayerDoc;
+            const newCash = (pData?.cash ?? 1500) + (passedGo ? 200 : 0);
+            const newNetWorth = (pData?.netWorth ?? 1500) + (passedGo ? 200 : 0);
 
             await updateDoc(pDocRef, {
               currentSpaceIndex: newSpace,
+              cash: newCash,
+              netWorth: newNetWorth,
               lastActiveAt: Date.now(),
             });
+
+            const targetSpace = DEFAULT_STANDARD_SPACES[newSpace] || {
+              id: `space_${newSpace}`,
+              index: newSpace,
+              name: `Space ${newSpace}`,
+              type: 'rest',
+            };
+
+            let nextPhase = 'TURN_END';
+            if (targetSpace.type === 'property' || targetSpace.type === 'company') {
+              const pAllSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
+              const allPlayers = pAllSnap.docs.map((d) => d.data() as FirestorePlayerDoc);
+              const isOwned = allPlayers.some((pl) => (pl.ownedSpaceIds || []).includes(targetSpace.id));
+              if (!isOwned) {
+                nextPhase = 'AWAITING_ACTION';
+              }
+            }
 
             await updateDoc(doc(db, 'matches', matchId), {
               lastRoll: [d1, d2],
               lastRollPlayerId: user.uid,
-              currentPhase: 'LANDED_SPACE',
+              currentPhase: nextPhase,
               updatedAt: Date.now(),
             });
 
@@ -559,7 +576,7 @@ export class CloudFunctionsClient {
               type: 'DICE_ROLLED',
               playerId: user.uid,
               playerName: user.displayName,
-              message: `${user.displayName} rolled a ${total} (${d1}+${d2}) and advanced to space #${newSpace}.`,
+              message: `${user.displayName} rolled a ${total} (${d1}+${d2}) and advanced to ${targetSpace.name}.${passedGo ? ' Collected 200 ƁM passing START.' : ''}`,
               timestamp: Date.now(),
             });
           } catch (err) {
@@ -634,6 +651,11 @@ export class CloudFunctionsClient {
                 ownedSpaceIds: [...owned, spaceId],
                 cash: Math.max(0, (pData.cash || 1500) - 200),
                 lastActiveAt: Date.now(),
+              });
+
+              await updateDoc(doc(db, 'matches', matchId), {
+                currentPhase: 'TURN_END',
+                updatedAt: Date.now(),
               });
 
               await addDoc(collection(db, 'matches', matchId, 'logs'), {
@@ -791,6 +813,116 @@ export class CloudFunctionsClient {
               { merge: true }
             );
           } catch {}
+        }
+        return { success: true } as TRes;
+      }
+
+      case 'executeBotTurn': {
+        if (!matchId) throw new Error('Match ID required');
+        if (db) {
+          try {
+            const mDocRef = doc(db, 'matches', matchId);
+            const mSnap = await getDoc(mDocRef);
+            if (!mSnap.exists()) throw new Error('Match not found');
+            const mData = mSnap.data() as FirestoreMatchDoc;
+
+            const targetBotId = (p.botId as string) || mData.currentPlayerId;
+            if (!targetBotId) throw new Error('No target bot ID');
+
+            const botDocRef = doc(db, 'matches', matchId, 'players', targetBotId);
+            const botSnap = await getDoc(botDocRef);
+            if (!botSnap.exists()) throw new Error('Bot player not found');
+            const botData = botSnap.data() as FirestorePlayerDoc;
+
+            // 1. Roll dice
+            const d1 = Math.floor(Math.random() * 6) + 1;
+            const d2 = Math.floor(Math.random() * 6) + 1;
+            const total = d1 + d2;
+            const curSpace = botData.currentSpaceIndex || 0;
+            const newSpace = (curSpace + total) % 52;
+            const passedGo = curSpace + total >= 52;
+
+            let updatedCash = (botData.cash ?? 1500) + (passedGo ? 200 : 0);
+            let updatedNetWorth = (botData.netWorth ?? 1500) + (passedGo ? 200 : 0);
+            let updatedOwnedSpaces = [...(botData.ownedSpaceIds || [])];
+
+            const targetSpace = DEFAULT_STANDARD_SPACES[newSpace] || {
+              id: `space_${newSpace}`,
+              index: newSpace,
+              name: `Space ${newSpace}`,
+              type: 'rest',
+            };
+
+            // Check if space is unowned property or company and bot wants to buy
+            const pSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
+            const allPlayers = pSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
+            const isOwned = allPlayers.some((pl) => (pl.ownedSpaceIds || []).includes(targetSpace.id));
+            const baseCost = targetSpace.baseCost || 100;
+
+            let boughtProperty = false;
+            if (!isOwned && (targetSpace.type === 'property' || targetSpace.type === 'company')) {
+              // If bot can afford property and maintain reserve
+              if (updatedCash >= baseCost + 100) {
+                updatedCash -= baseCost;
+                updatedOwnedSpaces.push(targetSpace.id);
+                boughtProperty = true;
+              }
+            }
+
+            // Update bot player document
+            await updateDoc(botDocRef, {
+              currentSpaceIndex: newSpace,
+              cash: updatedCash,
+              netWorth: updatedNetWorth,
+              ownedSpaceIds: updatedOwnedSpaces,
+              lastActiveAt: Date.now(),
+            });
+
+            if (boughtProperty) {
+              await addDoc(collection(db, 'matches', matchId, 'logs'), {
+                id: `log_${Date.now()}_buy`,
+                type: 'PROPERTY_BOUGHT',
+                playerId: targetBotId,
+                playerName: botData.displayName,
+                message: `${botData.displayName} acquired asset ${targetSpace.name} for ${baseCost} ƁM.`,
+                timestamp: Date.now(),
+              });
+            }
+
+            // Compute next player
+            const activePlayers = allPlayers.filter((pl) => pl.status === 'active' || pl.status === 'disconnected');
+            activePlayers.sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+            const curIdx = activePlayers.findIndex((pl) => pl.id === targetBotId);
+            const nextIdx = curIdx >= 0 ? (curIdx + 1) % activePlayers.length : 0;
+            const nextPlayer = activePlayers[nextIdx] || activePlayers[0];
+
+            const newTurn = (mData.turnNumber || 0) + 1;
+            const newRound = Math.floor(newTurn / Math.max(1, activePlayers.length)) + 1;
+
+            // Update match document
+            await updateDoc(mDocRef, {
+              currentPlayerId: nextPlayer.id,
+              turnNumber: newTurn,
+              roundNumber: newRound,
+              currentPhase: 'TURN_START',
+              lastRoll: [d1, d2],
+              lastRollPlayerId: targetBotId,
+              stateVersion: (mData.stateVersion || 1) + 1,
+              updatedAt: Date.now(),
+            });
+
+            // Add roll log
+            await addDoc(collection(db, 'matches', matchId, 'logs'), {
+              id: `log_${Date.now()}_roll`,
+              type: 'DICE_ROLLED',
+              playerId: targetBotId,
+              playerName: botData.displayName,
+              message: `${botData.displayName} rolled ${total} (${d1}+${d2}) and moved to ${targetSpace.name}.${passedGo ? ' Collected 200 ƁM passing START.' : ''} Turn passed to ${nextPlayer.displayName}.`,
+              timestamp: Date.now(),
+            });
+          } catch (err) {
+            console.warn('[CloudFunctionsClient:executeBotTurn] note:', err);
+          }
         }
         return { success: true } as TRes;
       }
