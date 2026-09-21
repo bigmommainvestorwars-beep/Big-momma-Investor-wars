@@ -113,10 +113,37 @@ function formatUserFacingMatchError(err: unknown): string {
     details?: { code?: string; message?: string };
   };
 
+  const code = anyErr.code || anyErr.serverCode || '';
   const message = anyErr.message ? String(anyErr.message) : String(err);
-  if (message.includes('Connection failed') || message.includes('timed out')) {
-    return 'Connection failed. Please check Firebase credentials or try Offline AI mode.';
+
+  if (
+    code === 'resource-exhausted' ||
+    message.includes('RESOURCE_EXHAUSTED') ||
+    message.includes('Quota exceeded')
+  ) {
+    return 'Firebase Firestore quota exceeded (RESOURCE_EXHAUSTED). The free-tier Spark quota has reached its daily limit. Please upgrade Firebase plan or try Offline AI mode.';
   }
+
+  if (
+    code === 'permission-denied' ||
+    message.includes('permission-denied') ||
+    message.includes('Missing or insufficient permissions')
+  ) {
+    return 'Database permission denied (permission-denied). Please verify Firestore security rules and authentication.';
+  }
+
+  if (code === 'unauthenticated' || message.includes('unauthenticated')) {
+    return 'User authentication failed (unauthenticated). Please sign in or reconnect to Firebase.';
+  }
+
+  if (code === 'unavailable' || message.includes('unavailable')) {
+    return 'Firebase servers are temporarily unavailable (unavailable). Please check network connection.';
+  }
+
+  if (code === 'deadline-exceeded' || message.includes('timed out')) {
+    return 'Multiplayer request timed out (deadline-exceeded). Connection to Firestore took longer than expected.';
+  }
+
   return message;
 }
 

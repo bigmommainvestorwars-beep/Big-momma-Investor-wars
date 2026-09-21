@@ -84,15 +84,11 @@ export class CloudFunctionsClient {
     }
 
     const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              'Connection failed. Please check Firebase credentials or try Offline AI mode.'
-            )
-          ),
-        NETWORK_TIMEOUT_MS
-      )
+      setTimeout(() => {
+        const timeoutErr: any = new Error('Multiplayer request timed out while connecting to Firestore.');
+        timeoutErr.code = 'deadline-exceeded';
+        reject(timeoutErr);
+      }, NETWORK_TIMEOUT_MS)
     );
 
     try {
@@ -109,19 +105,24 @@ export class CloudFunctionsClient {
         data: resData,
       };
     } catch (err: any) {
-      console.warn(`[CloudFunctionsClient] Operation ${functionName} error/timeout:`, err);
-      const msg =
-        err?.message && err.message.includes('Connection failed')
-          ? err.message
-          : 'Connection failed. Please check Firebase credentials or try Offline AI mode.';
+      const errorCode = err?.code || 'OPERATION_FAILED';
+      const errorMessage = err?.message || String(err);
+
+      console.error('[FIREBASE MULTIPLAYER ERROR]', {
+        operation: functionName,
+        firebaseService: 'firestore',
+        errorCode,
+        errorMessage,
+      });
+
       return {
         success: false,
         requestId: data.requestId,
         serverTime: Date.now(),
         error: {
-          code: 'CONNECTION_FAILED',
-          message: msg,
-          retryable: true,
+          code: errorCode,
+          message: errorMessage,
+          retryable: errorCode !== 'permission-denied' && errorCode !== 'resource-exhausted',
         },
       };
     }

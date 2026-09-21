@@ -11,7 +11,6 @@ import {
   where,
   orderBy,
   limit,
-  setDoc,
   Unsubscribe,
 } from 'firebase/firestore';
 import { getFirebaseFirestore } from './config';
@@ -511,20 +510,7 @@ export class MatchSyncService {
             const participantCount = Array.isArray(data.participantUserIds) ? data.participantUserIds.length : 0;
             const isStale = lastActive < cutoff || participantCount === 0;
 
-            if (isStale) {
-              // Asynchronously mark expired lobby as abandoned in Firestore
-              setDoc(
-                d.ref,
-                {
-                  status: 'abandoned',
-                  accessCode: '',
-                  isDeleted: true,
-                  participantUserIds: [],
-                  updatedAt: now,
-                },
-                { merge: true }
-              ).catch(() => {});
-            } else if (!data.isPrivate && data.status === 'waiting_for_players') {
+            if (!isStale && !data.isPrivate && data.status === 'waiting_for_players') {
               remoteMatches.push(data);
             }
           }
