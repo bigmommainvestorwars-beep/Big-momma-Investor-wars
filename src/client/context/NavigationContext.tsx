@@ -53,23 +53,22 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
 
   // Root Navigation Controller (Auth & Active Match observer)
   useEffect(() => {
-    // 1. Initial boot / splash logic
-    if (isAuthLoading || !isFirebaseConfigured) {
-      if (currentScreen !== 'SPLASH') navigate('SPLASH');
+    // 1. If auth is still initializing, allow splash screen to display
+    if (isAuthLoading) {
       return;
     }
 
-    // 2. Auth checking
+    // 2. Auth checking - Not authenticated
     if (!user) {
       if (currentScreen !== 'AUTH' && currentScreen !== 'SPLASH') {
         setHistory(['AUTH']); // Reset history to AUTH if logged out
       } else if (currentScreen === 'SPLASH') {
-        navigate('AUTH');
+        setHistory(['AUTH']);
       }
       return;
     }
 
-    // 3. Authenticated logic
+    // 3. Authenticated logic - Exit splash to HOME or active match
     if (user && currentScreen === 'SPLASH') {
       // Check if we have an active match
       if (activeMatchId && match) {
@@ -83,6 +82,7 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
       } else {
         setHistory(['HOME']);
       }
+      return;
     }
     
     // 4. Force transitions based on authoritative match state if we are in game flow
@@ -97,7 +97,7 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
       setHistory(['HOME']);
     }
 
-  }, [user, isFirebaseConfigured, isAuthLoading, activeMatchId, match?.status, currentScreen, navigate]);
+  }, [user, isAuthLoading, activeMatchId, match?.status, currentScreen, navigate]);
 
   return (
     <NavigationContext.Provider value={{ currentScreen, navigate, goBack, history }}>

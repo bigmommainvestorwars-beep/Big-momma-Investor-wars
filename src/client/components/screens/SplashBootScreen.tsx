@@ -1,28 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { motion } from 'motion/react';
-import { Landmark, ArrowRight } from 'lucide-react';
+import { Landmark } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { useNavigation } from '../../context/NavigationContext';
 
 export const SplashBootScreen: React.FC = () => {
   const { isFirebaseConfigured, isLoading } = useAuth();
-  const { navigate } = useNavigation();
-  const [showDirectEntry, setShowDirectEntry] = useState(false);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowDirectEntry(true);
-    }, 3000);
-    return () => clearTimeout(timer);
-  }, []);
   
   let statusText = 'INITIALIZING SYSTEM...';
-  if (!isFirebaseConfigured) statusText = 'VERIFYING FIREBASE CONFIGURATION...';
-  else if (isLoading) statusText = 'AUTHENTICATING SECURE SESSION...';
+  if (isLoading) statusText = 'AUTHENTICATING SECURE SESSION...';
+  else if (!isFirebaseConfigured) statusText = 'STARTING LOCAL SESSION...';
 
   return (
-    <div className="absolute inset-0 bg-[#030712] flex items-center justify-center text-slate-100 font-sans p-4">
-      <div className="text-center max-w-sm w-full">
+    <div className="absolute inset-0 bg-[#030712] flex items-center justify-center text-slate-100 font-sans">
+      <div className="text-center">
         <motion.div
           initial={{ scale: 0.8, opacity: 0 }}
           animate={{ scale: 1, opacity: 1 }}
@@ -53,7 +43,7 @@ export const SplashBootScreen: React.FC = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5, delay: 0.8 }}
-          className="mt-10 flex flex-col items-center gap-3"
+          className="mt-12 flex flex-col items-center gap-3"
         >
           <div className="w-48 h-1 bg-slate-800 rounded-full overflow-hidden">
             <motion.div 
@@ -64,19 +54,6 @@ export const SplashBootScreen: React.FC = () => {
             />
           </div>
           <span className="text-[10px] font-mono text-slate-500 tracking-widest">{statusText}</span>
-
-          {showDirectEntry && (
-            <motion.button
-              type="button"
-              initial={{ opacity: 0, y: 5 }}
-              animate={{ opacity: 1, y: 0 }}
-              onClick={() => navigate('HOME')}
-              className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-emerald-950/40 hover:bg-emerald-900/60 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs font-mono tracking-wider transition-all"
-            >
-              <span>ENTER GAME</span>
-              <ArrowRight className="w-3.5 h-3.5" />
-            </motion.button>
-          )}
         </motion.div>
       </div>
     </div>
