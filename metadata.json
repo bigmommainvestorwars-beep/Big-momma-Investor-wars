@@ -1,6 +1,6 @@
 {
   "name": "BIG MOMMA: INVESTORS' WAR",
-  "description": "Production multiplayer economic strategy board game with authoritative server state, 52-space circular board, real-time sync, and modular configuration.",
+  "description": "Multiplayer economic strategy board game with 52-space circular board, authoritative server state, Ranked Elo seasons, Investor Syndicates, cosmetic economy, and live notification triggers.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

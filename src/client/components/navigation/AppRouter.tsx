@@ -11,6 +11,7 @@ import { ProfileScreen } from '../screens/ProfileScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { GameOverScreen } from '../screens/GameOverScreen';
 import { RecoveryScreen } from '../screens/RecoveryScreen';
+import { MultiplayerTestScreen } from '../screens/MultiplayerTestScreen';
 
 // We reuse the existing gameplay screen
 import { LandscapeGameScreen } from '../game/LandscapeGameScreen';
@@ -42,6 +43,8 @@ export const AppRouter: React.FC = () => {
       return <SettingsScreen />;
     case 'RECOVERY':
       return <RecoveryScreen />;
+    case 'MULTIPLAYER_TEST':
+      return <MultiplayerTestScreen />;
     case 'ERROR':
       return <div className="text-white p-4">Error or Recovery State</div>;
     default:

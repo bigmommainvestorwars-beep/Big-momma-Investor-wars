@@ -10,12 +10,13 @@ export type Screen =
   | 'MATCH_SETUP' 
   | 'LOBBY' 
   | 'GAMEPLAY' 
-  | 'PAUSE_OVERLAY'
+  | 'PAUSE_OVERLAY' 
   | 'GAME_OVER' 
   | 'RESULTS' 
   | 'PROFILE' 
-  | 'SETTINGS'
-  | 'RECOVERY'
+  | 'SETTINGS' 
+  | 'RECOVERY' 
+  | 'MULTIPLAYER_TEST' 
   | 'ERROR';
 
 interface NavigationContextValue {

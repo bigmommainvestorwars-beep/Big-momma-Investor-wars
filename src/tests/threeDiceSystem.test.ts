@@ -10,6 +10,11 @@ import {
   DEFAULT_PHYSICS_CONFIG,
   LOCAL_FACE_NORMALS,
 } from '../client/components/game/dice/dicePhysics.js';
+import {
+  DICE_SKINS,
+  DICE_SKIN_LIST,
+  DiceSkinManager,
+} from '../services/cosmetics/diceSkins.js';
 
 test('True 3D Dice System: Mesh, 6 Faces, Geometry, and Authentic Pips', async (t) => {
   await t.test('1. Standard D6 Opposite Face Mapping adheres to Sum = 7 Law', () => {
@@ -649,5 +654,44 @@ test('True 3D Dice System: Mesh, 6 Faces, Geometry, and Authentic Pips', async (
         }
       }
     }
+  });
+
+  await t.test('20. Phase 4 Cosmetic Rewards: Dice Skins Roster & Manager Integration', () => {
+    // 1. Roster verification
+    assert.strictEqual(DICE_SKIN_LIST.length, 5, 'Should provide exactly 5 cosmetic dice skins');
+    const expectedSkinIds = ['obsidian-gold', 'neon-cyberpunk', 'crystal-ruby', 'ivory', 'emerald-vip'];
+    expectedSkinIds.forEach((id) => {
+      assert.ok(DICE_SKINS[id], `DICE_SKINS must contain '${id}'`);
+      assert.ok(DICE_SKINS[id].name, `Skin '${id}' must have a valid display name`);
+      assert.ok(DICE_SKINS[id].badgeIcon, `Skin '${id}' must have a badge icon`);
+      assert.ok(DICE_SKINS[id].rarity, `Skin '${id}' must have a rarity`);
+    });
+
+    // 2. Default unlock checks
+    const unlocked = DiceSkinManager.getUnlockedSkins();
+    assert.ok(unlocked.has('obsidian-gold'), 'Obsidian & Gold must be unlocked by default');
+    assert.ok(unlocked.has('ivory'), 'Royal Ivory must be unlocked by default');
+
+    // 3. Locking / unlocking rewards
+    const neonUnlockedInitially = DiceSkinManager.isSkinUnlocked('neon-cyberpunk');
+    DiceSkinManager.unlockSkin('neon-cyberpunk');
+    assert.strictEqual(
+      DiceSkinManager.isSkinUnlocked('neon-cyberpunk'),
+      true,
+      'Neon Cyberpunk should now be unlocked'
+    );
+
+    // 4. Equipping skin
+    const equipResult = DiceSkinManager.equipSkin('neon-cyberpunk');
+    assert.strictEqual(equipResult.success, true, 'Should successfully equip unlocked skin');
+    assert.strictEqual(
+      DiceSkinManager.getEquippedSkin(),
+      'neon-cyberpunk',
+      'Equipped skin should be neon-cyberpunk'
+    );
+
+    // 5. Restore default
+    DiceSkinManager.setEquippedSkin('obsidian-gold');
+    assert.strictEqual(DiceSkinManager.getEquippedSkin(), 'obsidian-gold');
   });
 });

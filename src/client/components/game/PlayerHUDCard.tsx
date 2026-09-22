@@ -54,7 +54,7 @@ export const PlayerHUDCard: React.FC<PlayerHUDCardProps> = ({
     }
     if (isCurrentTurn) {
       return (
-        <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 text-[9px] font-mono font-black uppercase tracking-wider flex items-center gap-1 shadow-sm">
+        <span className="px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 text-[9px] font-mono font-black uppercase tracking-wider flex items-center gap-1 shadow-sm animate-pulse">
           <span className="w-1.5 h-1.5 rounded-full bg-slate-950 animate-ping" />
           ACTIVE
         </span>
@@ -62,14 +62,24 @@ export const PlayerHUDCard: React.FC<PlayerHUDCardProps> = ({
     }
     if (player.isBot) {
       return (
-        <span className="px-1.5 py-0.5 rounded bg-slate-800/90 text-cyan-300 text-[9px] font-mono font-bold border border-slate-700">
+        <span className="px-1.5 py-0.5 rounded bg-cyan-950/80 text-cyan-300 text-[9px] font-mono font-bold border border-cyan-800 flex items-center gap-1">
+          <Bot className="w-2.5 h-2.5" />
           BOT
         </span>
       );
     }
+    if (player.playerTag) {
+      return (
+        <span className="px-1.5 py-0.5 rounded bg-slate-800/90 text-cyan-300 text-[9px] font-mono font-bold border border-slate-700 flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+          {player.playerTag}
+        </span>
+      );
+    }
     return (
-      <span className="px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-400 text-[9px] font-mono">
-        WAITING
+      <span className="px-1.5 py-0.5 rounded bg-slate-800/80 text-emerald-400 text-[9px] font-mono flex items-center gap-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
+        ONLINE
       </span>
     );
   };
@@ -92,7 +102,11 @@ export const PlayerHUDCard: React.FC<PlayerHUDCardProps> = ({
           <div
             className={`w-7 h-7 rounded-lg flex items-center justify-center font-black text-xs shrink-0 border border-slate-900 shadow-inner ${palette.bg} ${palette.text}`}
           >
-            {player.isBot ? <Bot className="w-3.5 h-3.5" /> : <UserIcon className="w-3.5 h-3.5" />}
+            {isHuman ? (
+              <span className="text-xs">👑</span>
+            ) : (
+              <Bot className="w-4 h-4 text-slate-900" />
+            )}
           </div>
 
           {/* Name & Subtitle */}
@@ -101,6 +115,11 @@ export const PlayerHUDCard: React.FC<PlayerHUDCardProps> = ({
               <span className="text-xs font-black text-slate-100 truncate">
                 {player.displayName}
               </span>
+              {player.rating && (
+                <span className="text-[8px] font-mono text-slate-400 shrink-0">
+                  {player.rating}
+                </span>
+              )}
               {isHuman && (
                 <span className="px-1 py-0.2 rounded bg-cyan-950 text-cyan-300 text-[8px] font-mono font-bold border border-cyan-800 shrink-0">
                   YOU

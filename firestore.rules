@@ -133,5 +133,14 @@ service cloud.firestore {
       allow read: if isAdmin();
       allow write: if false;
     }
+
+    // Multiplayer Rooms (Clean Phase 1 Multiplayer Kernel)
+    match /multiplayerRooms/{roomId} {
+      allow read, create, update, delete: if isAuthenticated();
+
+      match /players/{playerId} {
+        allow read, create, update, delete: if isAuthenticated();
+      }
+    }
   }
 }

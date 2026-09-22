@@ -6,11 +6,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TOTAL_BOARD_SPACES = exports.SERVER_STANDARD_SPACES = void 0;
 exports.getServerSpace = getServerSpace;
 exports.SERVER_STANDARD_SPACES = [
-    { id: 'space_0', index: 0, name: 'START / GO', type: 'start', description: 'Collect $200 salary when passing or landing.' },
+    { id: 'space_0', index: 0, name: 'START / GO', type: 'start', description: 'Collect 200 ƁM salary when passing or landing.' },
     { id: 'space_1', index: 1, name: 'Seed Capital Alpha', type: 'property', group: 'Seed Stage', baseCost: 60, baseRent: 6, rentTiers: [6, 30, 90, 270, 400, 550] },
     { id: 'space_2', index: 2, name: 'Angel Syndicate', type: 'market_event', description: 'Draw a dynamic Market Event card.' },
     { id: 'space_3', index: 3, name: 'Seed Capital Beta', type: 'property', group: 'Seed Stage', baseCost: 60, baseRent: 8, rentTiers: [8, 40, 100, 300, 450, 600] },
-    { id: 'space_4', index: 4, name: 'Capital Gains Tax', type: 'penalty', baseCost: 150, description: 'Pay $150 in regulatory audit taxes.' },
+    { id: 'space_4', index: 4, name: 'Capital Gains Tax', type: 'penalty', baseCost: 150, description: 'Pay 150 ƁM in regulatory audit taxes.' },
     { id: 'space_5', index: 5, name: 'Metro Transit System', type: 'company', group: 'Transport', baseCost: 200, baseRent: 25, rentTiers: [25, 50, 100, 200] },
     { id: 'space_6', index: 6, name: 'Quantum Cyber Lab', type: 'property', group: 'Cyber & Quantum', baseCost: 100, baseRent: 10, rentTiers: [10, 50, 150, 450, 625, 750] },
     { id: 'space_7', index: 7, name: 'Strategy Hub Alpha', type: 'sp_station', description: 'Gain +25 Strategy Points (SP).' },
@@ -36,7 +36,7 @@ exports.SERVER_STANDARD_SPACES = [
     { id: 'space_27', index: 27, name: 'Strategy Hub Beta', type: 'sp_station', description: 'Gain +30 Strategy Points (SP).' },
     { id: 'space_28', index: 28, name: 'Synthetix Cognitive', type: 'property', group: 'Artificial Intelligence', baseCost: 260, baseRent: 26, rentTiers: [26, 130, 390, 900, 1100, 1275] },
     { id: 'space_29', index: 29, name: 'Omni Intelligence HQ', type: 'property', group: 'Artificial Intelligence', baseCost: 280, baseRent: 28, rentTiers: [28, 150, 450, 1000, 1200, 1400] },
-    { id: 'space_30', index: 30, name: 'Market Volatility Fee', type: 'penalty', baseCost: 100, description: 'Market volatility surcharge. Pay $100.' },
+    { id: 'space_30', index: 30, name: 'Market Volatility Fee', type: 'penalty', baseCost: 100, description: 'Market volatility surcharge. Pay 100 ƁM.' },
     { id: 'space_31', index: 31, name: 'Titan Conglomerate', type: 'property', group: 'Global Titans', baseCost: 300, baseRent: 30, rentTiers: [30, 160, 480, 1050, 1300, 1500] },
     { id: 'space_32', index: 32, name: 'AeroSpace Prime', type: 'property', group: 'Global Titans', baseCost: 300, baseRent: 30, rentTiers: [30, 160, 480, 1050, 1300, 1500] },
     { id: 'space_33', index: 33, name: 'Central Bank Directive', type: 'market_event', description: 'Draw a dynamic Market Event card.' },
@@ -44,7 +44,7 @@ exports.SERVER_STANDARD_SPACES = [
     { id: 'space_35', index: 35, name: 'Orbital Constellation', type: 'company', group: 'Transport', baseCost: 200, baseRent: 25, rentTiers: [25, 50, 100, 200] },
     { id: 'space_36', index: 36, name: 'Venture Capital Board', type: 'sp_station', description: 'Gain +35 Strategy Points (SP).' },
     { id: 'space_37', index: 37, name: 'Wall Street Citadel', type: 'property', group: 'Wall Street Apex', baseCost: 350, baseRent: 35, rentTiers: [35, 175, 500, 1100, 1300, 1500] },
-    { id: 'space_38', index: 38, name: 'Super-Wealth Assessment', type: 'penalty', baseCost: 100, description: 'Super-wealth regulatory assessment. Pay $100.' },
+    { id: 'space_38', index: 38, name: 'Super-Wealth Assessment', type: 'penalty', baseCost: 100, description: 'Super-wealth regulatory assessment. Pay 100 ƁM.' },
     { id: 'space_39', index: 39, name: 'Mayfair Financial Tower', type: 'property', group: 'Wall Street Apex', baseCost: 400, baseRent: 50, rentTiers: [50, 200, 600, 1400, 1700, 2000] },
     { id: 'space_40', index: 40, name: 'Silicon Valley Incubator', type: 'property', group: 'Seed Stage', baseCost: 80, baseRent: 10, rentTiers: [10, 50, 150, 450, 600, 800] },
     { id: 'space_41', index: 41, name: 'Private Equity Fund', type: 'market_event', description: 'Draw a dynamic Market Event card.' },

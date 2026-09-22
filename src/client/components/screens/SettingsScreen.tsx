@@ -1,14 +1,32 @@
 import React, { useState } from 'react';
-import { ChevronLeft, Volume2, VolumeX, Music, Settings as SettingsIcon, Monitor } from 'lucide-react';
+import {
+  ChevronLeft,
+  Volume2,
+  VolumeX,
+  Music,
+  Settings as SettingsIcon,
+  Monitor,
+  Dices,
+  Database,
+  Lock,
+  Unlock,
+  Sparkles,
+} from 'lucide-react';
 import { useNavigation } from '../../context/NavigationContext';
 import { useBackgroundMusic } from '../../hooks/useBackgroundMusic';
 import { diceAudio } from '../game/dice/diceAudio';
+import { DiceSkinManager } from '../../../services/cosmetics/diceSkins';
+import { DeveloperDiceStudioModal } from '../game/dice/DeveloperDiceStudioModal';
+import { ConfigurationInspector } from '../admin/ConfigurationInspector';
 
 export const SettingsScreen: React.FC = () => {
   const { goBack } = useNavigation();
   const { musicState, setVolume: setBgmVolume, toggleMute: toggleBgmMute } = useBackgroundMusic();
   const [sfxVolume, setSfxVolume] = useState<number>(0.85);
   const [sfxMuted, setSfxMuted] = useState<boolean>(diceAudio.getMuted());
+  const [showDiceStudio, setShowDiceStudio] = useState<boolean>(false);
+  const [showConfigInspector, setShowConfigInspector] = useState<boolean>(false);
+  const [isDevMode, setIsDevMode] = useState<boolean>(DiceSkinManager.isDeveloperMode());
 
   const handleSfxChange = (val: number) => {
     setSfxVolume(val);
@@ -153,6 +171,92 @@ export const SettingsScreen: React.FC = () => {
               </div>
             </div>
             
+            {/* Developer Tools */}
+            <div className="space-y-4">
+              <h3 className="text-xs font-bold text-amber-500 uppercase tracking-widest px-2 flex items-center gap-2">
+                <Dices className="w-4 h-4 text-amber-400" />
+                Developer Studio & Configurations
+              </h3>
+              <div className="bg-slate-950/50 rounded-xl border border-slate-800 divide-y divide-slate-800/50">
+                {/* 3D Dice Studio */}
+                <div className="p-4 flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-slate-200 flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      <span>3D Dice Themes Studio</span>
+                    </div>
+                    <div className="text-xs text-slate-400 font-mono">
+                      Preview all 5 PBR materials, trigger test rolls, and inspect caustics
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowDiceStudio(true)}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold font-mono transition-colors cursor-pointer"
+                  >
+                    Open Studio
+                  </button>
+                </div>
+
+                {/* Developer Mode Bypass */}
+                <div className="p-4 flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-slate-200 flex items-center gap-2">
+                      {isDevMode ? (
+                        <Unlock className="w-4 h-4 text-emerald-400" />
+                      ) : (
+                        <Lock className="w-4 h-4 text-slate-500" />
+                      )}
+                      <span>Developer Bypass Mode</span>
+                    </div>
+                    <div className="text-xs text-slate-400 font-mono">
+                      Bypass lock criteria and preview all dice skins in matches
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const next = !isDevMode;
+                      setIsDevMode(next);
+                      DiceSkinManager.setDeveloperMode(next);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold font-mono transition-colors border cursor-pointer ${
+                      isDevMode
+                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
+                        : 'bg-slate-800 text-slate-400 border-slate-700 hover:bg-slate-700'
+                    }`}
+                  >
+                    {isDevMode ? 'ENABLED' : 'DISABLED'}
+                  </button>
+                </div>
+
+                {/* Firestore Configurations Inspector */}
+                <div className="p-4 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-slate-200 flex items-center gap-2">
+                        <Database className="w-4 h-4 text-indigo-400" />
+                        <span>Firestore Configurations</span>
+                      </div>
+                      <div className="text-xs text-slate-400 font-mono">
+                        Authoritative /configurations catalog documents
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowConfigInspector(!showConfigInspector)}
+                      className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 text-xs font-bold font-mono transition-colors cursor-pointer"
+                    >
+                      {showConfigInspector ? 'Hide Inspector' : 'View Docs'}
+                    </button>
+                  </div>
+
+                  {showConfigInspector && (
+                    <div className="mt-2">
+                      <ConfigurationInspector />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
             {/* About */}
             <div className="space-y-4">
               <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest px-2 flex items-center gap-2">
@@ -179,6 +283,11 @@ export const SettingsScreen: React.FC = () => {
 
         </div>
       </div>
+
+      <DeveloperDiceStudioModal
+        isOpen={showDiceStudio}
+        onClose={() => setShowDiceStudio(false)}
+      />
     </div>
   );
 };

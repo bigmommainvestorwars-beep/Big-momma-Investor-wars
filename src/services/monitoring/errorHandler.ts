@@ -84,12 +84,26 @@ class CentralErrorHandler {
 
     // Console output formatted for structured logs
     if (ENV.isDevelopment) {
-      console.error(`[ErrorRecord][${record.errorCode}] ${record.message}`, {
-        severity: record.severity,
-        gameId: record.gameId,
-        requestId: record.requestId,
-        action: record.action,
-      });
+      if (record.severity === 'warn') {
+        console.warn(`[WarningRecord][${record.errorCode}] ${record.message}`, {
+          severity: record.severity,
+          gameId: record.gameId,
+          requestId: record.requestId,
+          action: record.action,
+        });
+      } else if (record.severity === 'info') {
+        console.info(`[InfoRecord][${record.errorCode}] ${record.message}`, {
+          severity: record.severity,
+          action: record.action,
+        });
+      } else {
+        console.error(`[ErrorRecord][${record.errorCode}] ${record.message}`, {
+          severity: record.severity,
+          gameId: record.gameId,
+          requestId: record.requestId,
+          action: record.action,
+        });
+      }
     }
 
     // Dispatch to registered remote monitoring transports

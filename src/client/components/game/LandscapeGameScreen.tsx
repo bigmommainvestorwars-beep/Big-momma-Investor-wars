@@ -48,11 +48,20 @@ import { formatBM, formatSP } from '../../utils/currency';
 import { PauseMenuOverlay } from '../screens/PauseMenuOverlay';
 import { OrientationGuard } from '../ui/OrientationGuard';
 import { backgroundMusic } from '../../services/backgroundMusic';
+import {
+  DiceSkinManager,
+  type DiceSkinId,
+} from '../../../services/cosmetics/diceSkins';
 import { BackgroundMusicControl } from './audio/BackgroundMusicControl';
+import { NotificationCenterDrawer } from '../ui/NotificationCenterDrawer';
+import { NotificationService } from '../../../services/notifications/notificationService';
+import { BankruptcyVignetteOverlay } from './BankruptcyVignetteOverlay';
+import { CosmeticsManager, EquippedCosmeticsState } from '../../../services/cosmetics/cosmeticsManager';
 
 export const LandscapeGameScreen: React.FC = () => {
   const {
     match,
+    activeMatchId,
     players,
     logs,
     activeAuction,
@@ -63,6 +72,7 @@ export const LandscapeGameScreen: React.FC = () => {
     clearMatchError,
     createCustomBotMatch,
     leaveMatch,
+    localRole,
     requestRoll,
     buyProperty,
     startSpaceAuction,
@@ -91,6 +101,39 @@ export const LandscapeGameScreen: React.FC = () => {
   const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
   const [showPauseMenu, setShowPauseMenu] = useState<boolean>(false);
   const [isMuted, setIsMuted] = useState<boolean>(true);
+  const [equippedSkin, setEquippedSkin] = useState<DiceSkinId>(() =>
+    DiceSkinManager.getEquippedSkin()
+  );
+  const [cosmetics, setCosmetics] = useState<EquippedCosmeticsState>(() =>
+    CosmeticsManager.getEquippedState()
+  );
+  const [bankruptcyVignetteOpen, setBankruptcyVignetteOpen] = useState<boolean>(false);
+  const [bankruptPlayerName, setBankruptPlayerName] = useState<string>('');
+  const prevBankruptPlayerIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const unsubSkin = DiceSkinManager.subscribe((skin) => {
+      setEquippedSkin(skin);
+    });
+    const unsubCosmetics = CosmeticsManager.subscribe((state) => {
+      setCosmetics(state);
+    });
+    return () => {
+      unsubSkin();
+      unsubCosmetics();
+    };
+  }, []);
+
+  // Monitor for any player entering bankrupt status
+  useEffect(() => {
+    players.forEach((p) => {
+      if (p.status === 'bankrupt' && !prevBankruptPlayerIdsRef.current.has(p.id)) {
+        prevBankruptPlayerIdsRef.current.add(p.id);
+        setBankruptPlayerName(p.displayName);
+        setBankruptcyVignetteOpen(true);
+      }
+    });
+  }, [players]);
 
   // Step 16 Movement synchronization: delay player token advancement until 3D dice completes landing & glow
   const [pendingMovement, setPendingMovement] = useState<{
@@ -120,16 +163,104 @@ export const LandscapeGameScreen: React.FC = () => {
   // Selected space object
   const selectedSpace = DEFAULT_STANDARD_SPACES[selectedSpaceIndex] || DEFAULT_STANDARD_SPACES[0];
 
-  // Identify Human vs Current Active player
-  const humanPlayer = players.find((p) => !p.isBot) || players[0] || null;
-  const currentPlayer = players.find((p) => p.id === match?.currentPlayerId) || null;
-  const isHumanTurn = Boolean(currentPlayer && !currentPlayer.isBot);
+  const isLocalSim = activeMatchId === 'local-simulation' || Boolean(activeMatchId?.startsWith('local-'));
+
+  // Identify Local Device Player vs Current Authoritative Active Player
+  const myPlayer = useMemo(() => {
+    const currentUid =
+      user?.uid ||
+      (typeof window !== 'undefined' ? localStorage.getItem('investor_wars_client_uid') : null);
+    if (currentUid) {
+      const found = players.find((p) => p.userId === currentUid || p.id === currentUid);
+      if (found) return found;
+    }
+
+    // For ONLINE MULTIPLAYER:
+    // myPlayer MUST resolve by the authoritative Firebase Auth UID.
+    // If no matching player exists, myPlayer must be null / unresolved.
+    // Never use players[0] as the identity fallback in an online match.
+    if (!isLocalSim) {
+      return null;
+    }
+
+    // Differentiate by explicit localRole for OFFLINE / LOCAL SIMULATION ONLY:
+    if (localRole === 'guest') {
+      const guest = players.find(
+        (p) => match?.hostUserId ? (p.userId !== match.hostUserId && p.id !== match.hostUserId) : p !== players[0]
+      );
+      if (guest) return guest;
+    }
+    if (localRole === 'host') {
+      const host = players.find(
+        (p) => match?.hostUserId ? (p.userId === match.hostUserId || p.id === match.hostUserId) : p === players[0]
+      );
+      if (host) return host;
+    }
+    // Fallback if solo bot match or spectator (LOCAL ONLY): first non-bot player or first player
+    return players.find((p) => !p.isBot) || players[0] || null;
+  }, [players, user?.uid, localRole, match?.hostUserId, activeMatchId]);
+
+  const currentPlayer = useMemo(() => {
+    if (!match?.currentPlayerId) return null;
+    return (
+      players.find((p) => p.id === match.currentPlayerId || (p.userId && p.userId === match.currentPlayerId)) || null
+    );
+  }, [players, match?.currentPlayerId]);
+
+  // Turn ownership flags:
+  // Is it specifically THIS client device's turn?
+  const isMyTurn = Boolean(
+    myPlayer &&
+      currentPlayer &&
+      (myPlayer.id === currentPlayer.id ||
+        (Boolean(myPlayer.userId) && Boolean(currentPlayer.userId) && myPlayer.userId === currentPlayer.userId))
+  );
+  const isOtherHumanTurn = Boolean(currentPlayer && !currentPlayer.isBot && !isMyTurn);
+  const isBotTurn = Boolean(currentPlayer?.isBot);
+
+  // Host detection (only the match host executes autonomous bot turns in multiplayer)
+  const isHost = Boolean(
+    isLocalSim
+      ? localRole === 'host' || players[0]?.id === (user?.uid || myPlayer?.id)
+      : match?.hostUserId &&
+          (match.hostUserId === user?.uid ||
+            match.hostUserId === myPlayer?.userId ||
+            match.hostUserId === myPlayer?.id)
+  );
 
   // Phase analysis
   const currentPhase = match?.currentPhase || 'TURN_START';
-  const canRoll = isHumanTurn && (currentPhase === 'TURN_START' || currentPhase === 'AWAITING_ROLL');
-  const canActOnProperty = isHumanTurn && currentPhase === 'AWAITING_ACTION';
-  const canEndTurn = isHumanTurn && currentPhase === 'TURN_END';
+  const canRoll =
+    isMyTurn &&
+    (currentPhase === 'TURN_START' ||
+      currentPhase === 'AWAITING_ROLL' ||
+      currentPhase === 'ROLL_OR_ACTION');
+  const canActOnProperty = isMyTurn && currentPhase === 'AWAITING_ACTION';
+  const canEndTurn =
+    isMyTurn && (currentPhase === 'TURN_END' || currentPhase === 'AWAITING_ACTION');
+
+  // Dynamic cross-client turn status text for non-active observing human players
+  const otherHumanStatusText = useMemo(() => {
+    if (!isOtherHumanTurn) return undefined;
+    const name = currentPlayer?.displayName || 'Opponent';
+    const hasAlreadyRolled = Boolean(
+      match?.lastRoll && match?.lastRollPlayerId === currentPlayer?.id
+    );
+
+    if ((currentPhase === 'TURN_START' || currentPhase === 'AWAITING_ROLL') && !hasAlreadyRolled) {
+      return `Waiting for ${name} to roll...`;
+    }
+    if (currentPhase === 'AWAITING_ACTION') {
+      return `${name} is deciding on property action...`;
+    }
+    if (currentPhase === 'TURN_END') {
+      return `${name} is finishing their turn...`;
+    }
+    if (hasAlreadyRolled) {
+      return `${name} is finishing action...`;
+    }
+    return `Waiting for ${name}...`;
+  }, [isOtherHumanTurn, currentPlayer?.displayName, currentPlayer?.id, match?.lastRoll, match?.lastRollPlayerId, currentPhase]);
 
   // Ownership of selected space
   const selectedSpaceOwner = players.find((p) =>
@@ -151,28 +282,107 @@ export const LandscapeGameScreen: React.FC = () => {
     }
   }, [currentPlayer?.currentSpaceIndex, isRolling, pendingMovement]);
 
-  // Trigger landing modal when human lands on a space in AWAITING_ACTION (guarded against active roll flight)
+  // Trigger landing modal when THIS human player lands on a space in AWAITING_ACTION (guarded against active roll flight)
   useEffect(() => {
-    if (isHumanTurn && currentPhase === 'AWAITING_ACTION' && !isRolling && !pendingMovement) {
+    if (isMyTurn && currentPhase === 'AWAITING_ACTION' && !isRolling && !pendingMovement) {
       setShowLandingModal(true);
+    } else if (!isMyTurn) {
+      setShowLandingModal(false);
     }
-  }, [isHumanTurn, currentPhase, isRolling, pendingMovement]);
+  }, [isMyTurn, currentPhase, isRolling, pendingMovement]);
 
-  // Autonomous Bot Runner Loop
+  // Autonomous Bot Runner Loop - only HOST runs bots in multiplayer
   useEffect(() => {
-    if (!autoPlayBots || !match || match.status !== 'in_progress') return;
+    if (!autoPlayBots || !match || (match.status !== 'in_progress' && match.status !== 'active')) return;
     if (!currentPlayer || !currentPlayer.isBot) return;
+    if (!isHost) return;
 
     const timer = setTimeout(async () => {
       try {
         await executeBotTurn(currentPlayer.id);
-      } catch {
-        // Handled through match error
+      } catch (err) {
+        console.warn('Bot turn execution note:', err);
       }
     }, botSpeedMs);
 
     return () => clearTimeout(timer);
-  }, [autoPlayBots, match?.status, currentPlayer?.id, currentPlayer?.isBot, match?.currentPhase, botSpeedMs]);
+  }, [autoPlayBots, match?.status, currentPlayer?.id, currentPlayer?.isBot, match?.currentPhase, botSpeedMs, isHost, executeBotTurn]);
+
+  // Push Notification Triggers: Your Turn Alert
+  const lastNotifiedTurnRef = useRef<number>(-1);
+  useEffect(() => {
+    if (
+      isMyTurn &&
+      canRoll &&
+      match &&
+      (match.status === 'in_progress' || match.status === 'active') &&
+      match.turnNumber !== lastNotifiedTurnRef.current
+    ) {
+      lastNotifiedTurnRef.current = match.turnNumber;
+      NotificationService.triggerYourTurn(match.id, 60);
+    }
+  }, [isMyTurn, canRoll, match?.turnNumber, match?.id, match?.status]);
+
+  // Sync remote roll result when another player rolls
+  const lastRemoteRollTurnRef = useRef<number>(-1);
+  useEffect(() => {
+    if (match?.lastRoll && match?.turnNumber !== undefined && match?.turnNumber !== lastRemoteRollTurnRef.current) {
+      if (!isMyTurn && match.lastRollPlayerId && match.lastRollPlayerId !== myPlayer?.id) {
+        lastRemoteRollTurnRef.current = match.turnNumber;
+        setLastRoll(match.lastRoll);
+      }
+    }
+  }, [match?.lastRoll, match?.turnNumber, isMyTurn, match?.lastRollPlayerId, myPlayer?.id]);
+
+  // Push Notification Triggers: Opponent Roll Alert
+  const prevBotActionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (currentPlayer && currentPlayer.isBot && match?.currentPhase === 'AWAITING_ACTION') {
+      const actionKey = `${currentPlayer.id}-${match.turnNumber}-${currentPlayer.currentSpaceIndex}`;
+      if (prevBotActionRef.current !== actionKey) {
+        prevBotActionRef.current = actionKey;
+        const rolledSpace = DEFAULT_STANDARD_SPACES[currentPlayer.currentSpaceIndex];
+        NotificationService.triggerOpponentRoll(
+          currentPlayer.displayName,
+          7,
+          rolledSpace?.name || `Space #${currentPlayer.currentSpaceIndex}`
+        );
+      }
+    }
+  }, [currentPlayer?.id, currentPlayer?.isBot, match?.currentPhase, match?.turnNumber, currentPlayer?.currentSpaceIndex, currentPlayer?.displayName]);
+
+  // Push Notification Triggers: Auction Outbid Alert
+  const prevAuctionHighestBidderRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeAuction && myPlayer) {
+      if (
+        prevAuctionHighestBidderRef.current === myPlayer.id &&
+        activeAuction.currentHighestBidderId &&
+        activeAuction.currentHighestBidderId !== myPlayer.id
+      ) {
+        const bidder = players.find((p) => p.id === activeAuction.currentHighestBidderId);
+        const propertyName =
+          activeAuction.assetName ||
+          DEFAULT_STANDARD_SPACES.find((s) => s.id === activeAuction.assetId)?.name ||
+          'Asset Space';
+        NotificationService.triggerAuctionOutbid(
+          propertyName,
+          activeAuction.currentHighestBid,
+          bidder?.displayName || 'Rival Investor'
+        );
+      }
+      prevAuctionHighestBidderRef.current = activeAuction.currentHighestBidderId || null;
+    } else if (!activeAuction) {
+      prevAuctionHighestBidderRef.current = null;
+    }
+  }, [
+    activeAuction?.currentHighestBidderId,
+    activeAuction?.currentHighestBid,
+    activeAuction?.assetId,
+    activeAuction?.assetName,
+    myPlayer?.id,
+    players,
+  ]);
 
   // Handle human roll: Generate random result first, then animate 3D dice toward it
   const handleRollDice = async () => {
@@ -244,7 +454,7 @@ export const LandscapeGameScreen: React.FC = () => {
 
       // Trigger space action modal once hopping completes (~600ms)
       setTimeout(() => {
-        if (isHumanTurn && currentPhase === 'AWAITING_ACTION') {
+        if (isMyTurn && currentPhase === 'AWAITING_ACTION') {
           setShowLandingModal(true);
         }
       }, 650);
@@ -361,6 +571,9 @@ export const LandscapeGameScreen: React.FC = () => {
               </span>
             </button>
 
+            {/* In-Game Push Notification Drawer */}
+            <NotificationCenterDrawer />
+
             {/* Pause Menu Toggle */}
             <button
               type="button"
@@ -416,18 +629,26 @@ export const LandscapeGameScreen: React.FC = () => {
             
             {/* Dynamic Turn & Phase Announcement Banner */}
             <div className={`w-full max-w-xl py-2 px-4 rounded-xl border flex items-center justify-between shadow-lg transition-all ${
-              isHumanTurn
+              isMyTurn
                 ? 'bg-gradient-to-r from-emerald-950/90 via-slate-900 to-emerald-950/90 border-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.2)]'
+                : isOtherHumanTurn
+                ? 'bg-gradient-to-r from-cyan-950/90 via-slate-900 to-cyan-950/90 border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.15)]'
                 : 'bg-slate-900/80 border-slate-800 text-slate-400'
             }`}>
               <div className="flex items-center gap-2.5">
-                <span className={`w-2.5 h-2.5 rounded-full ${isHumanTurn ? 'bg-emerald-400 animate-ping' : 'bg-cyan-400'}`} />
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  isMyTurn
+                    ? 'bg-emerald-400 animate-ping'
+                    : isOtherHumanTurn
+                    ? 'bg-cyan-400 animate-pulse'
+                    : 'bg-amber-400'
+                }`} />
                 <div>
                   <div className="text-[10px] font-mono uppercase tracking-widest text-slate-400">
-                    {isHumanTurn ? 'Authoritative Active Player' : 'Authoritative Turn Flow'}
+                    {isMyTurn ? 'Your Turn' : isOtherHumanTurn ? `${currentPlayer?.displayName}'s Turn` : 'Autonomous AI Turn'}
                   </div>
                   <div className="text-xs sm:text-sm font-black uppercase tracking-wider text-slate-100">
-                    {isHumanTurn
+                    {isMyTurn
                       ? currentPhase === 'TURN_START'
                         ? 'YOUR TURN — ROLL THE DICE TO ADVANCE'
                         : currentPhase === 'AWAITING_ACTION'
@@ -435,6 +656,12 @@ export const LandscapeGameScreen: React.FC = () => {
                         : currentPhase === 'AUCTION'
                         ? 'YOUR TURN — ACTIVE HIGH-FREQUENCY AUCTION'
                         : 'YOUR TURN — COMPLETE TURN'
+                      : isOtherHumanTurn
+                      ? currentPhase === 'TURN_START' || currentPhase === 'AWAITING_ROLL'
+                        ? `${currentPlayer?.displayName.toUpperCase()} IS ROLLING THE DICE...`
+                        : currentPhase === 'AWAITING_ACTION'
+                        ? `${currentPlayer?.displayName.toUpperCase()} IS DECIDING ON PROPERTY...`
+                        : `${currentPlayer?.displayName.toUpperCase()} IS COMPLETING TURN...`
                       : `BOT'S TURN — ${currentPlayer?.displayName || 'AI'} IS COMPUTING STRATEGY...`}
                   </div>
                 </div>
@@ -521,7 +748,7 @@ export const LandscapeGameScreen: React.FC = () => {
               <AuctionArena
                 auction={activeAuction}
                 players={players}
-                humanPlayer={humanPlayer}
+                humanPlayer={myPlayer}
                 isActionPending={isActionPending}
                 onPlaceBid={(amt) => placeBid(activeAuction.id, amt)}
                 onPassAuction={() => passAuction(activeAuction.id)}
@@ -575,7 +802,7 @@ export const LandscapeGameScreen: React.FC = () => {
                   </h3>
                 </div>
                 <span className="text-[10px] font-mono text-slate-400">
-                  {isHumanTurn ? 'Your Active Turn' : 'Autonomous Bot Turn'}
+                  {isMyTurn ? 'Your Active Turn' : isOtherHumanTurn ? `${currentPlayer?.displayName}'s Turn` : 'Autonomous Bot Turn'}
                 </span>
               </div>
 
@@ -587,8 +814,20 @@ export const LandscapeGameScreen: React.FC = () => {
                   canRoll={canRoll}
                   onRoll={handleRollDice}
                   onAnimationComplete={handleDiceAnimationComplete}
-                  disabledReason={!isHumanTurn ? 'Waiting for Bot' : currentPhase !== 'TURN_START' ? 'Turn in progress' : undefined}
+                  disabledReason={
+                    isBotTurn
+                      ? `${currentPlayer?.displayName || 'AI'} is computing move...`
+                      : isOtherHumanTurn
+                      ? otherHumanStatusText
+                      : currentPhase !== 'TURN_START' &&
+                        currentPhase !== 'AWAITING_ROLL' &&
+                        currentPhase !== 'ROLL_OR_ACTION'
+                      ? 'Turn in progress'
+                      : undefined
+                  }
                   initialMaterial="glossy-plastic"
+                  equippedSkin={equippedSkin}
+                  onSkinChange={(skin) => DiceSkinManager.setEquippedSkin(skin)}
                 />
               </div>
 
@@ -633,34 +872,34 @@ export const LandscapeGameScreen: React.FC = () => {
                 )}
 
                 {/* SP Tactical Menu Trigger */}
-                {humanPlayer && (
+                {myPlayer && (
                   <button
                     type="button"
                     onClick={() => setShowSPModal(true)}
                     className="w-full py-2.5 px-3 bg-indigo-950/80 hover:bg-indigo-900/80 border border-indigo-500/40 text-indigo-300 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors min-h-[44px]"
                   >
                     <Zap className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>Strategy Points ({formatSP(humanPlayer.specialPoints)})</span>
+                    <span>Strategy Points ({formatSP(myPlayer.specialPoints)})</span>
                   </button>
                 )}
 
                 {/* Corporate Debt & Mortgage Desk Trigger */}
-                {humanPlayer && (
+                {myPlayer && (
                   <button
                     id="mortgage-restructuring-menu-btn"
                     type="button"
                     onClick={() => setShowDebtModal(true)}
                     className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 transition-all min-h-[44px] cursor-pointer shadow-md ${
-                      humanPlayer.cash < 150
+                      myPlayer.cash < 150
                         ? 'bg-amber-600 hover:bg-amber-500 text-slate-950 shadow-amber-950/60 animate-pulse font-black'
                         : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30'
                     }`}
                   >
                     <Landmark className="w-3.5 h-3.5" />
                     <span>
-                      {humanPlayer.cash < 150
+                      {myPlayer.cash < 150
                         ? '⚠️ Debt Restructure / Mortgage'
-                        : `Mortgages & Debt (${(humanPlayer.mortgagedSpaceIds || []).length} Pledged)`}
+                        : `Mortgages & Debt (${(myPlayer.mortgagedSpaceIds || []).length} Pledged)`}
                     </span>
                   </button>
                 )}
@@ -747,8 +986,8 @@ export const LandscapeGameScreen: React.FC = () => {
                     }
                   : null
               }
-              humanPlayer={humanPlayer}
-              isHumanTurn={isHumanTurn}
+              humanPlayer={myPlayer}
+              isHumanTurn={isMyTurn}
               currentPhase={currentPhase}
               isActionPending={isActionPending}
               onBuyProperty={handleBuyProperty}
@@ -764,8 +1003,8 @@ export const LandscapeGameScreen: React.FC = () => {
             <HDSpacePopOutModal
               spaceIndex={selectedSpaceIndex}
               players={players}
-              humanPlayer={humanPlayer}
-              isHumanTurn={isHumanTurn}
+              humanPlayer={myPlayer}
+              isHumanTurn={isMyTurn}
               currentPhase={currentPhase}
               isActionPending={isActionPending}
               onSelectSpace={(newIdx) => setSelectedSpaceIndex(newIdx)}
@@ -781,9 +1020,9 @@ export const LandscapeGameScreen: React.FC = () => {
 
         {/* OVERLAY: CORPORATE DEBT RESTRUCTURING & MORTGAGE MODAL */}
         <AnimatePresence>
-          {showDebtModal && humanPlayer && (
+          {showDebtModal && myPlayer && (
             <DebtRestructuringModal
-              player={humanPlayer}
+              player={myPlayer}
               isActionPending={isActionPending}
               onMortgageProperty={mortgageProperty}
               onUnmortgageProperty={unmortgageProperty}
@@ -795,9 +1034,9 @@ export const LandscapeGameScreen: React.FC = () => {
 
         {/* OVERLAY: SP TACTICAL ABILITIES MODAL */}
         <AnimatePresence>
-          {showSPModal && humanPlayer && (
+          {showSPModal && myPlayer && (
             <SPActionModal
-              player={humanPlayer}
+              player={myPlayer}
               allPlayers={players}
               isActionPending={isActionPending}
               onExecute={async (actionId, cost, targetId) => {
@@ -871,6 +1110,14 @@ export const LandscapeGameScreen: React.FC = () => {
             <PauseMenuOverlay onClose={() => setShowPauseMenu(false)} />
           )}
         </AnimatePresence>
+
+        {/* OVERLAY: BANKRUPTCY CINEMATIC VIGNETTE */}
+        <BankruptcyVignetteOverlay
+          isOpen={bankruptcyVignetteOpen}
+          vignetteId={cosmetics.vignette}
+          playerName={bankruptPlayerName}
+          onClose={() => setBankruptcyVignetteOpen(false)}
+        />
       </div>
     </OrientationGuard>
   );

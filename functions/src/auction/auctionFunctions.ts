@@ -16,6 +16,7 @@ import {
   ServerFunctionError,
   SERVER_ERROR_CODES,
 } from '../types/contracts';
+import { withErrorHandling } from '../system/errorWrapper';
 
 const db = getAdminFirestore();
 
@@ -35,7 +36,7 @@ export interface AuctionState {
  * 11. createAuction
  */
 export const createAuction = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ assetId: string; assetName: string; startingBid?: number }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ assetId: string; assetName: string; startingBid?: number }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
 
@@ -78,14 +79,14 @@ export const createAuction = onCall(
       serverTime: Date.now(),
       data: auctionData,
     };
-  }
+  })
 );
 
 /**
  * 12. placeBid
  */
 export const placeBid = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ auctionId: string; amount: number; actingPlayerId?: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ auctionId: string; amount: number; actingPlayerId?: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
     RateLimiter.check(auth.userId, 'placeBid');
@@ -186,14 +187,14 @@ export const placeBid = onCall(
       data: result,
     };
     return response;
-  }
+  })
 );
 
 /**
  * 13. passAuction
  */
 export const passAuction = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ auctionId: string; actingPlayerId?: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ auctionId: string; actingPlayerId?: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
 
@@ -289,14 +290,14 @@ export const passAuction = onCall(
       serverTime: Date.now(),
       data: result,
     };
-  }
+  })
 );
 
 /**
  * 14. resolveAuction
  */
 export const resolveAuction = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ auctionId: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ auctionId: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
 
@@ -350,5 +351,5 @@ export const resolveAuction = onCall(
       serverTime: Date.now(),
       data: result,
     };
-  }
+  })
 );

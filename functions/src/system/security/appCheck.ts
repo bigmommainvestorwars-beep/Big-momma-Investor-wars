@@ -19,14 +19,12 @@ export class AppCheckGuard {
     if (envMode === 'permissive') return 'permissive';
     if (envMode === 'disabled') return 'disabled';
 
-    // Tiered environment defaults:
-    // Staging / Production: Enforced (strict)
-    // Development / Emulators: Disabled (for zero friction local DX)
+    // Permissive mode by default unless explicitly strict
     const appEnv = process.env.APP_ENV;
-    if (appEnv === 'production' || appEnv === 'staging') {
+    if (envMode === 'strict') {
       return 'strict';
     }
-    return 'disabled';
+    return 'permissive';
   }
 
   public static verify(request: CallableRequest): { verified: boolean; appId?: string } {

@@ -79,56 +79,62 @@ class BackgroundMusicEngine {
   private initAudio(): void {
     if (typeof window === 'undefined') return;
 
-    // Use the primary static path
-    this.audio = new Audio('/audio/tems-free-mind.mp3');
-    this.audio.loop = true;
-    this.audio.preload = 'auto';
-    this.audio.volume = this.state.isMuted ? 0 : this.state.volume;
+    try {
+      // Use the primary static path
+      this.audio = new Audio('/audio/tems-free-mind.mp3');
+      if (!this.audio || typeof this.audio.addEventListener !== 'function') return;
 
-    this.audio.addEventListener('loadedmetadata', () => {
-      if (this.audio) {
-        this.state.duration = this.audio.duration || 0;
-        this.state.isLoaded = true;
+      this.audio.loop = true;
+      this.audio.preload = 'auto';
+      this.audio.volume = this.state.isMuted ? 0 : this.state.volume;
+
+      this.audio.addEventListener('loadedmetadata', () => {
+        if (this.audio) {
+          this.state.duration = this.audio.duration || 0;
+          this.state.isLoaded = true;
+          this.notify();
+        }
+      });
+
+      this.audio.addEventListener('timeupdate', () => {
+        if (this.audio) {
+          this.state.currentTime = this.audio.currentTime;
+        }
+      });
+
+      this.audio.addEventListener('play', () => {
+        this.state.isPlaying = true;
+        this.state.isAutoplayPending = false;
         this.notify();
-      }
-    });
+      });
 
-    this.audio.addEventListener('timeupdate', () => {
-      if (this.audio) {
-        this.state.currentTime = this.audio.currentTime;
-      }
-    });
+      this.audio.addEventListener('pause', () => {
+        this.state.isPlaying = false;
+        this.notify();
+      });
 
-    this.audio.addEventListener('play', () => {
-      this.state.isPlaying = true;
-      this.state.isAutoplayPending = false;
-      this.notify();
-    });
-
-    this.audio.addEventListener('pause', () => {
-      this.state.isPlaying = false;
-      this.notify();
-    });
-
-    // Safety restart for non-stop infinite playback
-    this.audio.addEventListener('ended', () => {
-      if (!this.isUserPaused && this.audio) {
-        this.audio.currentTime = 0;
-        this.audio.play().catch(() => {});
-      }
-    });
-
-    // Error recovery: fallback to secondary path if needed
-    this.audio.addEventListener('error', (e) => {
-      console.warn('Background audio load warning:', e);
-      if (this.audio && !this.audio.src.includes('background-music.mp3')) {
-        this.audio.src = '/audio/background-music.mp3';
-        this.audio.load();
-        if (!this.isUserPaused) {
+      // Safety restart for non-stop infinite playback
+      this.audio.addEventListener('ended', () => {
+        if (!this.isUserPaused && this.audio) {
+          this.audio.currentTime = 0;
           this.audio.play().catch(() => {});
         }
-      }
-    });
+      });
+
+      // Error recovery: fallback to secondary path if needed
+      this.audio.addEventListener('error', (e) => {
+        console.warn('Background audio load warning:', e);
+        if (this.audio && !this.audio.src.includes('background-music.mp3')) {
+          this.audio.src = '/audio/background-music.mp3';
+          this.audio.load();
+          if (!this.isUserPaused) {
+            this.audio.play().catch(() => {});
+          }
+        }
+      });
+    } catch (err) {
+      console.warn('[BackgroundMusic] Failed to initialize Audio instance:', err);
+    }
   }
 
   /**

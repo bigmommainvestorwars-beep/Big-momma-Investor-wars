@@ -26,11 +26,15 @@ import {
   LogIn,
   Mail,
   Lock,
+  Database,
 } from 'lucide-react';
 import { useGame } from '../context/GameContext';
 import { useAuth } from '../context/AuthContext';
 import { PRESET_BOT_PROFILES, BotPersonality } from '../../bot/botTypes';
 import { botRunnerService } from '../../bot/botRunnerService';
+import { DeveloperDiceStudioCard } from './game/dice/DeveloperDiceStudioCard';
+import { ConfigurationInspector } from './admin/ConfigurationInspector';
+import { formatBM } from '../utils/currency';
 
 export const MatchTestingConsole: React.FC = () => {
   const {
@@ -75,6 +79,7 @@ export const MatchTestingConsole: React.FC = () => {
   const [showEmailAuth, setShowEmailAuth] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [activeConsoleTab, setActiveConsoleTab] = useState<'match' | 'dice_studio' | 'configurations'>('match');
   const [bidInput, setBidInput] = useState<number>(100);
   const [lastRollResult, setLastRollResult] = useState<{ roll: number; newSpace: number } | null>(null);
   const [selectedBotCount, setSelectedBotCount] = useState<number>(3);
@@ -287,8 +292,66 @@ export const MatchTestingConsole: React.FC = () => {
         </div>
       )}
 
-      {/* When no match is active: Lobby & Match Creation */}
-      {!activeMatchId && (
+      {/* Console Section Navigation Tabs */}
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2.5">
+        <button
+          onClick={() => setActiveConsoleTab('match')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeConsoleTab === 'match'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <Play className="w-3.5 h-3.5" />
+          <span>Match Engine & Lobby</span>
+          {activeMatchId && (
+            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveConsoleTab('dice_studio')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeConsoleTab === 'dice_studio'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <Dice5 className="w-3.5 h-3.5 text-amber-300" />
+          <span>3D Dice Themes Studio</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-100 text-amber-900 font-normal">
+            Dev Preview
+          </span>
+        </button>
+
+        <button
+          onClick={() => setActiveConsoleTab('configurations')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeConsoleTab === 'configurations'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+          }`}
+        >
+          <Database className="w-3.5 h-3.5 text-indigo-300" />
+          <span>System Configurations</span>
+          <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-100 text-indigo-900 font-normal">
+            /configurations
+          </span>
+        </button>
+      </div>
+
+      {activeConsoleTab === 'dice_studio' && (
+        <DeveloperDiceStudioCard />
+      )}
+
+      {activeConsoleTab === 'configurations' && (
+        <ConfigurationInspector />
+      )}
+
+      {activeConsoleTab === 'match' && (
+        <>
+          {/* When no match is active: Lobby & Match Creation */}
+          {!activeMatchId && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Quick Start Card */}
           <div className="p-6 bg-white rounded-lg border border-slate-200 shadow-xs space-y-4">
@@ -501,11 +564,11 @@ export const MatchTestingConsole: React.FC = () => {
                   <div className="mt-3 space-y-1.5 text-xs">
                     <div className="flex justify-between text-slate-600">
                       <span>Cash:</span>
-                      <strong className="text-slate-900 font-mono">${p.cash?.toLocaleString()}</strong>
+                      <strong className="text-slate-900 font-mono">{formatBM(p.cash)}</strong>
                     </div>
                     <div className="flex justify-between text-slate-600">
                       <span>Net Worth:</span>
-                      <strong className="text-slate-900 font-mono">${p.netWorth?.toLocaleString()}</strong>
+                      <strong className="text-slate-900 font-mono">{formatBM(p.netWorth)}</strong>
                     </div>
                     <div className="flex justify-between text-slate-600">
                       <span>Space Index:</span>
@@ -701,7 +764,7 @@ export const MatchTestingConsole: React.FC = () => {
                 <div className="p-3 bg-white rounded border border-amber-200">
                   <div className="text-slate-500">Current Highest Bid</div>
                   <div className="text-lg font-bold text-slate-900 font-mono">
-                    ${activeAuction.currentHighestBid?.toLocaleString() || '0'}
+                    {formatBM(activeAuction.currentHighestBid || 0)}
                   </div>
                 </div>
                 <div className="p-3 bg-white rounded border border-amber-200">
@@ -785,6 +848,8 @@ export const MatchTestingConsole: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

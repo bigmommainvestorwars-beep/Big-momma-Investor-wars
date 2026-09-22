@@ -1500,12 +1500,16 @@ export const SpaceEntailAnimation: React.FC<SpaceEntailAnimationProps> = ({
       mouseRef.current.active = false;
     };
 
-    canvas.addEventListener('mousemove', onMouseMove);
-    canvas.addEventListener('mouseleave', onMouseLeave);
+    if (canvas && typeof canvas.addEventListener === 'function') {
+      canvas.addEventListener('mousemove', onMouseMove);
+      canvas.addEventListener('mouseleave', onMouseLeave);
+    }
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-      if (canvas) {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('resize', handleResize);
+      }
+      if (canvas && typeof canvas.removeEventListener === 'function') {
         canvas.removeEventListener('mousemove', onMouseMove);
         canvas.removeEventListener('mouseleave', onMouseLeave);
       }

@@ -153,6 +153,29 @@
         "timestamp": { "type": "number", "required": true },
         "resolved": { "type": "boolean", "required": true }
       }
+    },
+    "multiplayerRooms": {
+      "collectionName": "multiplayerRooms",
+      "description": "Authoritative multiplayer room kernel",
+      "fields": {
+        "roomId": { "type": "string", "required": true },
+        "roomCode": { "type": "string", "required": true },
+        "hostUid": { "type": "string", "required": true },
+        "status": { "type": "string", "required": true },
+        "playerUids": { "type": "array", "required": true },
+        "createdAt": { "type": "number", "required": true },
+        "updatedAt": { "type": "number", "required": true }
+      }
+    },
+    "multiplayerRoomPlayers": {
+      "collectionName": "multiplayerRooms/{roomId}/players",
+      "description": "Authoritative multiplayer room player presence and identity",
+      "fields": {
+        "uid": { "type": "string", "required": true },
+        "displayName": { "type": "string", "required": true },
+        "joinedAt": { "type": "number", "required": true },
+        "online": { "type": "boolean", "required": true }
+      }
     }
   }
 }

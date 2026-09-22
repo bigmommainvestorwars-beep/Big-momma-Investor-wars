@@ -1,10 +1,22 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { Landmark } from 'lucide-react';
+import { Landmark, UserCheck } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export const AuthScreen: React.FC = () => {
-  const { signInWithGoogle } = useAuth();
+  const { signInWithGoogle, signInAnonymously } = useAuth();
+  const [loading, setLoading] = useState(false);
+
+  const handleAnon = async () => {
+    try {
+      setLoading(true);
+      await signInAnonymously();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="absolute inset-0 bg-[#030712] flex items-center justify-center text-slate-100 font-sans p-4">
@@ -24,20 +36,30 @@ export const AuthScreen: React.FC = () => {
           <h2 className="text-sm font-bold tracking-[0.2em] text-slate-400 mt-1">INVESTORS' WAR</h2>
         </div>
 
-        <div className="p-8 space-y-6 text-center">
+        <div className="p-8 space-y-4 text-center">
           <p className="text-sm text-slate-400 font-mono">
             SECURE FINANCIAL AUTHORIZATION REQUIRED
           </p>
           
           <button
             onClick={signInWithGoogle}
-            className="w-full py-4 px-4 bg-white hover:bg-slate-100 text-slate-900 rounded-xl font-bold flex items-center justify-center gap-3 transition-colors active:scale-95"
+            disabled={loading}
+            className="w-full py-4 px-4 bg-white hover:bg-slate-100 text-slate-900 rounded-xl font-bold flex items-center justify-center gap-3 transition-colors active:scale-95 cursor-pointer disabled:opacity-50"
           >
             <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-5 h-5" />
             <span>AUTHORIZE WITH GOOGLE</span>
           </button>
+
+          <button
+            onClick={handleAnon}
+            disabled={loading}
+            className="w-full py-3.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl font-bold flex items-center justify-center gap-2 transition-colors active:scale-95 cursor-pointer disabled:opacity-50 text-xs uppercase tracking-wider"
+          >
+            <UserCheck className="w-4 h-4 text-emerald-400" />
+            <span>{loading ? 'Authenticating...' : 'ANONYMOUS INVESTOR SIGN-IN'}</span>
+          </button>
           
-          <p className="text-[10px] text-slate-600 uppercase tracking-wider">
+          <p className="text-[10px] text-slate-600 uppercase tracking-wider pt-2">
             By authorizing, you agree to the Syndicate Terms & Conditions.
           </p>
         </div>

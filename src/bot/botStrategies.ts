@@ -392,6 +392,125 @@ export class ConservativeBotStrategy implements IBotStrategy {
 }
 
 /**
+ * Speculative Strategy:
+ * Pursues high upside, willing to take calculated risks on auctions and market volatility,
+ * maintaining a moderate cash buffer.
+ */
+export class SpeculativeBotStrategy implements IBotStrategy {
+  public personality: BotPersonality = 'speculative';
+
+  public evaluateTurnAction(context: BotDecisionContext): BotDecision {
+    const { match, botPlayer, currentSpace, legalActions, profile } = context;
+
+    if (match.currentPhase === 'TURN_START' || match.currentPhase === 'AWAITING_ROLL') {
+      const rollAction = legalActions.find((a) => a.actionType === 'ROLL_DICE');
+      if (rollAction) {
+        return {
+          actionType: 'ROLL_DICE',
+          payload: {},
+          rationale: `${profile.displayName} speculative roll.`,
+          confidence: 1.0,
+        };
+      }
+    }
+
+    if (match.currentPhase === 'AWAITING_ACTION' && currentSpace) {
+      const buyAction = legalActions.find((a) => a.actionType === 'BUY_PROPERTY');
+      const auctionAction = legalActions.find((a) => a.actionType === 'START_SPACE_AUCTION');
+
+      const cost = currentSpace.baseCost || 100;
+      if (buyAction && botPlayer.cash - cost >= profile.minReserveCash * 0.7) {
+        return {
+          actionType: 'BUY_PROPERTY',
+          payload: {},
+          rationale: `${profile.displayName} speculatively acquires ${currentSpace.name} for $${cost}.`,
+          confidence: 0.9,
+        };
+      }
+
+      if (auctionAction) {
+        return {
+          actionType: 'START_SPACE_AUCTION',
+          payload: {},
+          rationale: `${profile.displayName} triggers auction on ${currentSpace.name} for speculative gains.`,
+          confidence: 0.8,
+        };
+      }
+    }
+
+    const completeAction = legalActions.find((a) => a.actionType === 'COMPLETE_TURN');
+    if (completeAction) {
+      return {
+        actionType: 'COMPLETE_TURN',
+        payload: {},
+        rationale: `${profile.displayName} completes turn.`,
+        confidence: 1.0,
+      };
+    }
+
+    const fallback = legalActions[0];
+    return {
+      actionType: fallback?.actionType || 'COMPLETE_TURN',
+      payload: fallback?.payload || {},
+      rationale: `${profile.displayName} default move.`,
+      confidence: 0.5,
+    };
+  }
+
+  public evaluateAuctionAction(context: BotDecisionContext): BotDecision {
+    const { botPlayer, activeAuction, currentSpace, legalActions, profile } = context;
+    if (!activeAuction) {
+      return { actionType: 'PASS_AUCTION', payload: {}, rationale: 'No auction.', confidence: 1.0 };
+    }
+
+    if (activeAuction.currentHighestBidderId === botPlayer.id) {
+      return { actionType: 'PASS_AUCTION', payload: {}, rationale: 'Already highest bidder.', confidence: 1.0 };
+    }
+
+    const bidAction = legalActions.find((a) => a.actionType === 'PLACE_BID');
+    const nextBid = activeAuction.currentHighestBid + 10;
+    const baseCost = currentSpace?.baseCost || 150;
+    const maxWillingBid = Math.floor(baseCost * profile.maxAuctionMultiplier);
+
+    if (bidAction && botPlayer.cash - nextBid >= profile.minReserveCash * 0.6 && nextBid <= maxWillingBid) {
+      return {
+        actionType: 'PLACE_BID',
+        payload: { auctionId: activeAuction.id, amount: nextBid },
+        rationale: `${profile.displayName} places speculative bid of $${nextBid}.`,
+        confidence: 0.85,
+      };
+    }
+
+    return {
+      actionType: 'PASS_AUCTION',
+      payload: { auctionId: activeAuction.id },
+      rationale: `${profile.displayName} passes speculative auction.`,
+      confidence: 0.9,
+    };
+  }
+
+  public evaluateChoiceAction(context: BotDecisionContext): BotDecision {
+    const { pendingChoice, profile } = context;
+    if (!pendingChoice || pendingChoice.options.length === 0) {
+      return { actionType: 'COMPLETE_TURN', payload: {}, rationale: 'No choice pending.', confidence: 1.0 };
+    }
+
+    // Speculative prefers medium or high risk options
+    const preferredOption =
+      pendingChoice.options.find((o) => o.risk === 'high') ||
+      pendingChoice.options.find((o) => o.risk === 'medium') ||
+      pendingChoice.options[0];
+
+    return {
+      actionType: 'SUBMIT_MARKET_CHOICE',
+      payload: { eventId: pendingChoice.eventId, choiceId: preferredOption.choiceId },
+      rationale: `${profile.displayName} selects speculative choice: ${preferredOption.label}.`,
+      confidence: 0.9,
+    };
+  }
+}
+
+/**
  * Strategy Registry & Factory
  */
 export class BotStrategyRegistry {
@@ -401,6 +520,7 @@ export class BotStrategyRegistry {
     this.registerStrategy(new BalancedBotStrategy());
     this.registerStrategy(new AggressiveBotStrategy());
     this.registerStrategy(new ConservativeBotStrategy());
+    this.registerStrategy(new SpeculativeBotStrategy());
   }
 
   public registerStrategy(strategy: IBotStrategy): void {

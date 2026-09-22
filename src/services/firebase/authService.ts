@@ -188,20 +188,15 @@ class FirebaseAuthService implements IAuthService {
   }
 
   /**
-   * Anonymous Authentication is disabled for production.
-   * Isolated only to local development emulator environments.
+   * Anonymous Authentication
+   * Signs in anonymously using Firebase Auth and maps the user profile.
    */
   public async signInAnonymously(): Promise<User> {
-    if (ENV.isProduction || !ENV.useEmulator) {
-      throw new Error(
-        'Anonymous Authentication is disabled for this project. Please sign in with Google or Email/Password.'
-      );
-    }
     const auth = getFirebaseAuth();
     try {
       const credential = await fbSignInAnonymously(auth);
       const user = mapFirebaseUser(credential.user);
-      logger.log('security_event', 'info', `User signed in anonymously (emulator): ${user.uid}`, { userId: user.uid });
+      logger.log('security_event', 'info', `User signed in anonymously: ${user.uid}`, { userId: user.uid });
       return user;
     } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_ANON_SIGN_IN_FAILED', action: 'signInAnonymously' });

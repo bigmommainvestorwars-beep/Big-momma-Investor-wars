@@ -21,6 +21,7 @@ import { DEFAULT_STANDARD_SPACES } from '../../../config/boardConfig';
 import { BoardSpace } from '../../../types/board';
 import { FirestorePlayerDoc } from '../../../services/firebase/matchSyncService';
 import { formatBM } from '../../utils/currency';
+import { CosmeticsManager, EquippedCosmeticsState } from '../../../services/cosmetics/cosmeticsManager';
 
 // The 52 spaces total
 const TOTAL_SPACES = 52;
@@ -224,26 +225,115 @@ export const CircularBoard52: React.FC<CircularBoard52Props> = ({
     return map;
   }, [players, animatedSpacePositions]);
 
+  // Cosmetics state for Board Skin, Token icon, and Trail
+  const [cosmetics, setCosmetics] = useState<EquippedCosmeticsState>(() =>
+    CosmeticsManager.getEquippedState()
+  );
+
+  useEffect(() => {
+    const unsub = CosmeticsManager.subscribe((equipped) => {
+      setCosmetics(equipped);
+    });
+    return unsub;
+  }, []);
+
+  const boardTheme = useMemo(() => {
+    switch (cosmetics.boardSkin) {
+      case 'board-cyberpunk-tokyo':
+        return {
+          halo: 'bg-fuchsia-500/15',
+          rim: 'bg-indigo-950 border-purple-500/60 shadow-[0_0_50px_rgba(168,85,247,0.4),inset_0_0_30px_rgba(168,85,247,0.3)]',
+          innerTicks: 'border-fuchsia-500/20',
+          coreBg: 'bg-gradient-to-br from-[#13072b] via-[#1d0b3d] to-[#080214] border-cyan-400/60',
+          gridColor: '#d946ef',
+          centerTitleGrad: 'from-fuchsia-400 via-cyan-300 to-indigo-300',
+          centerIconGrad: 'from-fuchsia-500/30 via-cyan-500/20 to-purple-500/30 border-fuchsia-400/50',
+          subText: 'Cyber District • Neo-Tokyo',
+          centerBackdrop: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=1200&q=80',
+        };
+      case 'board-sovereign-gold':
+        return {
+          halo: 'bg-amber-500/15',
+          rim: 'bg-amber-950 border-amber-500/80 shadow-[0_0_50px_rgba(245,158,11,0.35),inset_0_0_30px_rgba(245,158,11,0.25)]',
+          innerTicks: 'border-amber-500/25',
+          coreBg: 'bg-gradient-to-br from-[#1a1205] via-[#261a08] to-[#0a0702] border-amber-400/70',
+          gridColor: '#fbbf24',
+          centerTitleGrad: 'from-amber-300 via-yellow-200 to-amber-400',
+          centerIconGrad: 'from-amber-500/30 via-yellow-500/20 to-amber-600/30 border-amber-400/60',
+          subText: 'Imperial Sovereign Reserve • 52 Spaces',
+          centerBackdrop: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?auto=format&fit=crop&w=1200&q=80',
+        };
+      case 'board-classic-emerald':
+        return {
+          halo: 'bg-emerald-500/15',
+          rim: 'bg-[#062016] border-emerald-600/80 shadow-[0_0_50px_rgba(16,185,129,0.35),inset_0_0_30px_rgba(16,185,129,0.25)]',
+          innerTicks: 'border-emerald-500/20',
+          coreBg: 'bg-gradient-to-br from-[#031d13] via-[#072d1e] to-[#02130c] border-emerald-500/60',
+          gridColor: '#10b981',
+          centerTitleGrad: 'from-emerald-300 via-teal-200 to-emerald-400',
+          centerIconGrad: 'from-emerald-500/30 via-teal-500/20 to-emerald-600/30 border-emerald-400/60',
+          subText: 'Mayfair Financial Club • 52 Spaces',
+          centerBackdrop: 'https://images.unsplash.com/photo-1448375240586-882707db888b?auto=format&fit=crop&w=1200&q=80',
+        };
+      case 'board-wallstreet-night':
+      default:
+        return {
+          halo: 'bg-cyan-500/5',
+          rim: 'bg-slate-950 border-slate-800/90 shadow-[0_0_50px_rgba(0,0,0,0.9),inset_0_0_30px_rgba(0,0,0,0.9)]',
+          innerTicks: 'border-cyan-500/15',
+          coreBg: 'bg-gradient-to-br from-[#060b18] via-[#091124] to-[#040711] border-slate-700/60',
+          gridColor: '#38bdf8',
+          centerTitleGrad: 'from-emerald-300 via-cyan-200 to-indigo-300',
+          centerIconGrad: 'from-emerald-500/20 via-cyan-500/10 to-indigo-500/20 border-emerald-400/40',
+          subText: 'Financial District • 52 Spaces',
+          centerBackdrop: 'https://images.unsplash.com/photo-1444723121867-7a241cacace9?auto=format&fit=crop&w=1200&q=80',
+        };
+    }
+  }, [cosmetics.boardSkin]);
+
+  const playerTokenIcon = useMemo(() => {
+    switch (cosmetics.token) {
+      case 'token-titan-yacht': return '🛥️';
+      case 'token-private-jet': return '✈️';
+      case 'token-quantum-diamond': return '💎';
+      case 'token-billionaire-hat': return '🎩';
+      case 'token-sovereign-lion': return '🦁';
+      case 'token-golden-bull':
+      default: return '🐂';
+    }
+  }, [cosmetics.token]);
+
+  const trailGlowClass = useMemo(() => {
+    switch (cosmetics.trail) {
+      case 'trail-cyber-neon': return 'shadow-[0_0_12px_#06b6d4,0_0_24px_#a855f7]';
+      case 'trail-molten-gold': return 'shadow-[0_0_12px_#f59e0b,0_0_24px_#ef4444]';
+      case 'trail-cosmic-void': return 'shadow-[0_0_12px_#8b5cf6,0_0_24px_#000000]';
+      case 'trail-emerald-glint': return 'shadow-[0_0_12px_#10b981,0_0_24px_#34d399]';
+      case 'trail-golden-stardust':
+      default: return 'shadow-[0_0_12px_#fbbf24,0_0_20px_#f59e0b]';
+    }
+  }, [cosmetics.trail]);
+
   return (
     <div className="relative w-full aspect-square max-w-[820px] max-h-[820px] flex items-center justify-center select-none">
       {/* Outer Glow Halo */}
-      <div className="absolute inset-[3%] rounded-full bg-cyan-500/5 blur-2xl pointer-events-none" />
+      <div className={`absolute inset-[3%] rounded-full ${boardTheme.halo} blur-2xl pointer-events-none transition-all duration-700`} />
 
       {/* Main Outer Circular Rim Track */}
-      <div className="relative w-full h-full rounded-full bg-slate-950 border-[6px] sm:border-[8px] border-slate-800/90 shadow-[0_0_50px_rgba(0,0,0,0.9),inset_0_0_30px_rgba(0,0,0,0.9)] flex items-center justify-center overflow-hidden">
+      <div className={`relative w-full h-full rounded-full ${boardTheme.rim} border-[6px] sm:border-[8px] flex items-center justify-center overflow-hidden transition-all duration-700`}>
         
         {/* Subtle Radial Measurement Ticks */}
-        <div className="absolute inset-0 rounded-full border border-cyan-500/15 pointer-events-none" />
+        <div className={`absolute inset-0 rounded-full border ${boardTheme.innerTicks} pointer-events-none`} />
         <div className="absolute inset-[15%] rounded-full border border-emerald-500/15 pointer-events-none" />
         <div className="absolute inset-[25%] rounded-full border border-slate-700/40 pointer-events-none" />
 
         {/* Central Financial District Core / Centerpiece */}
-        <div className="absolute inset-[17%] rounded-full bg-gradient-to-br from-[#060b18] via-[#091124] to-[#040711] border-2 sm:border-4 border-slate-700/60 shadow-[inset_0_0_60px_rgba(0,0,0,0.95)] overflow-hidden flex flex-col items-center justify-center z-10 pointer-events-none">
-          {/* Subtle HD Skyscrapers & Trees Skylight Reflection */}
+        <div className={`absolute inset-[17%] rounded-full ${boardTheme.coreBg} border-2 sm:border-4 shadow-[inset_0_0_60px_rgba(0,0,0,0.95)] overflow-hidden flex flex-col items-center justify-center z-10 pointer-events-none transition-all duration-700`}>
+          {/* Subtle HD Center Theme Skylight Reflection */}
           <div className="absolute inset-0 opacity-35 mix-blend-screen pointer-events-none">
             <img
-              src="https://images.unsplash.com/photo-1444723121867-7a241cacace9?auto=format&fit=crop&w=1200&q=80"
-              alt="Central Park Skyscrapers and Trees"
+              src={boardTheme.centerBackdrop}
+              alt="Center Reflection Backdrop"
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center filter saturate-150 contrast-125"
             />
@@ -254,25 +344,25 @@ export const CircularBoard52: React.FC<CircularBoard52Props> = ({
           <div 
             className="absolute inset-0 opacity-15"
             style={{
-              backgroundImage: 'radial-gradient(circle, #38bdf8 1px, transparent 1px)',
+              backgroundImage: `radial-gradient(circle, ${boardTheme.gridColor} 1px, transparent 1px)`,
               backgroundSize: '16px 16px',
             }}
           />
 
           {/* Central Logo & Atmosphere */}
           <div className="relative z-10 text-center flex flex-col items-center p-4">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-gradient-to-br from-emerald-500/20 via-cyan-500/10 to-indigo-500/20 border border-emerald-400/40 flex items-center justify-center mb-1.5 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
+            <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-gradient-to-br ${boardTheme.centerIconGrad} border flex items-center justify-center mb-1.5 shadow-[0_0_20px_rgba(16,185,129,0.3)]`}>
               <Landmark className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
             </div>
 
             <div className="text-[8px] sm:text-[10px] font-black tracking-[0.35em] uppercase text-emerald-400 mb-0.5">
               BIG MOMMA
             </div>
-            <h1 className="text-lg sm:text-xl md:text-2xl font-black tracking-[0.18em] uppercase text-transparent bg-clip-text bg-gradient-to-r from-emerald-300 via-cyan-200 to-indigo-300 leading-tight">
+            <h1 className={`text-lg sm:text-xl md:text-2xl font-black tracking-[0.18em] uppercase text-transparent bg-clip-text bg-gradient-to-r ${boardTheme.centerTitleGrad} leading-tight`}>
               INVESTORS' WAR
             </h1>
             <div className="text-[8px] sm:text-[10px] font-mono font-bold tracking-widest text-cyan-400/80 uppercase mt-0.5">
-              Financial District • 52 Spaces
+              {boardTheme.subText}
             </div>
 
             {/* Subtle Live Indicator Ribbon */}
@@ -413,24 +503,66 @@ export const CircularBoard52: React.FC<CircularBoard52Props> = ({
           const palette = PLAYER_PALETTES[pIdx % PLAYER_PALETTES.length];
           const isTurn = p.id === currentPlayerId;
 
+          const isHuman = !p.isBot;
+          const tokenIcon = isHuman ? playerTokenIcon : null;
+
           return (
             <motion.div
               key={p.id}
               animate={{ rotate: tokenAngle }}
-              transition={{ duration: 0.25, ease: 'easeOut' }}
+              transition={{ duration: 0.35, ease: 'easeOut' }}
               className="absolute inset-0 pointer-events-none origin-center z-40"
             >
-              {/* Token marker positioned on the space track */}
+              {/* Token and player tag positioned on the space track */}
               <div
                 style={{ top: radialTop }}
-                className={`absolute left-1/2 -translate-x-1/2 w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 rounded-full border-2 ${
-                  isTurn
-                    ? `${palette.border} ring-4 ring-emerald-400/60 shadow-[0_0_15px_#10b981]`
-                    : 'border-slate-950 shadow-[0_2px_8px_rgba(0,0,0,0.8)]'
-                } ${palette.bg} ${palette.text} flex items-center justify-center font-black text-[8px] sm:text-[10px] md:text-xs select-none`}
-                title={`${p.displayName} (${p.isBot ? 'AI Bot' : 'Human'}) on Space #${spaceIdx}`}
+                className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center select-none"
               >
-                {p.isBot ? <Bot className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5" /> : p.displayName.charAt(0)}
+                {/* Floating Player Tag (Counter-Rotated so it stays horizontal and readable anywhere on the circle) */}
+                <div
+                  style={{ transform: `rotate(${-tokenAngle}deg)` }}
+                  className={`-top-6 absolute transition-transform duration-200 pointer-events-auto flex items-center gap-1 px-1.5 py-0.5 rounded-full backdrop-blur-md shadow-md border text-[8px] sm:text-[9px] font-bold whitespace-nowrap z-50 ${
+                    isTurn
+                      ? 'bg-slate-900/95 border-emerald-400 text-emerald-300 ring-2 ring-emerald-500/50 shadow-[0_0_12px_rgba(16,185,129,0.5)] scale-105'
+                      : 'bg-slate-950/85 border-slate-700/80 text-slate-200'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      isTurn ? 'bg-emerald-400 animate-ping' : 'bg-emerald-500'
+                    }`}
+                  />
+                  <span className="truncate max-w-[60px] sm:max-w-[75px]">
+                    {isHuman ? 'You' : p.displayName.split(' ')[0]}
+                  </span>
+                  {p.isBot && (
+                    <span className="text-[6px] font-bold uppercase text-cyan-300 bg-cyan-950/80 px-1 rounded border border-cyan-800/60">
+                      BOT
+                    </span>
+                  )}
+                  {isTurn && (
+                    <span className="text-[6px] font-black uppercase text-amber-300 bg-amber-950/80 px-1 rounded border border-amber-700/60">
+                      TURN
+                    </span>
+                  )}
+                </div>
+
+                {/* Token Sphere Body */}
+                <div
+                  style={{ transform: `rotate(${-tokenAngle}deg)` }}
+                  className={`w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 rounded-full border-2 ${
+                    isTurn
+                      ? `${palette.border} ring-4 ring-emerald-400/80 shadow-[0_0_18px_#10b981] ${isHuman ? trailGlowClass : ''}`
+                      : 'border-slate-950 shadow-[0_2px_8px_rgba(0,0,0,0.85)]'
+                  } ${palette.bg} ${palette.text} flex items-center justify-center font-black text-[8px] sm:text-[10px] md:text-xs select-none`}
+                  title={`${p.displayName} (${p.playerTag || (p.isBot ? 'Bot' : 'Human')}) on Space #${spaceIdx}`}
+                >
+                  {isHuman ? (
+                    <span className="text-[9px] sm:text-[11px] leading-none">{tokenIcon || '👑'}</span>
+                  ) : (
+                    <Bot className="w-2.5 h-2.5 sm:w-3.5 sm:h-3.5 text-slate-900" />
+                  )}
+                </div>
               </div>
             </motion.div>
           );

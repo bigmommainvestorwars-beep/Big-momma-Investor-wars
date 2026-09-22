@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Landmark, Play, User, Settings, LogOut } from 'lucide-react';
+import { Landmark, Play, User, Settings, LogOut, Radio } from 'lucide-react';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
 import { useGame } from '../../context/GameContext';
@@ -42,6 +42,14 @@ export const HomeScreen: React.FC = () => {
           >
             <Play className="w-5 h-5 fill-current" />
             New Game
+          </button>
+
+          <button
+            onClick={() => navigate('MULTIPLAYER_TEST')}
+            className="w-full py-3.5 px-5 rounded-xl flex items-center gap-3 bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-300 transition-all text-sm font-bold tracking-wider uppercase text-left border border-cyan-500/30 hover:border-cyan-400 cursor-pointer shadow-md shadow-cyan-950/30"
+          >
+            <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
+            Multiplayer Test (Kernel)
           </button>
 
           <button

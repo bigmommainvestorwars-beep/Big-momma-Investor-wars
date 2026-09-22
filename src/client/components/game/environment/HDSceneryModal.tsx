@@ -205,10 +205,10 @@ export const HDSceneryModal: React.FC<HDSceneryModalProps> = ({
           <div className="p-3 sm:p-4 bg-slate-950 border-t border-slate-800">
             <div className="text-[11px] font-mono text-slate-400 mb-2 flex items-center justify-between">
               <span>Select Environment Atmosphere:</span>
-              <span className="text-emerald-400">4 HD Photographic Perspectives</span>
+              <span className="text-emerald-400">2 HD Photographic Perspectives</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
               {SCENERY_PRESETS.map((preset) => {
                 const isSelected = preset.id === activePreset.id;
                 return (

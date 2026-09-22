@@ -16,6 +16,7 @@ import {
   ServerFunctionError,
   SERVER_ERROR_CODES,
 } from '../types/contracts';
+import { withErrorHandling } from '../system/errorWrapper';
 
 const db = getAdminFirestore();
 
@@ -23,7 +24,7 @@ const db = getAdminFirestore();
  * 14. activateCompanyAbility
  */
 export const activateCompanyAbility = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ companyId: string; abilityId: string; targetId?: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ companyId: string; abilityId: string; targetId?: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
     RateLimiter.check(auth.userId, 'spAction');
@@ -78,5 +79,5 @@ export const activateCompanyAbility = onCall(
       data: result,
     };
     return response;
-  }
+  })
 );

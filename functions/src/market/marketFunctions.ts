@@ -15,6 +15,7 @@ import {
   ServerFunctionError,
   SERVER_ERROR_CODES,
 } from '../types/contracts';
+import { withErrorHandling } from '../system/errorWrapper';
 
 const db = getAdminFirestore();
 
@@ -30,7 +31,7 @@ export interface PendingChoiceData {
  * 13. submitMarketChoice
  */
 export const submitMarketChoice = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ choiceId: string; selectedOptionId: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ choiceId: string; selectedOptionId: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
     RateLimiter.check(auth.userId, 'marketChoice');
@@ -80,5 +81,5 @@ export const submitMarketChoice = onCall(
       data: result,
     };
     return response;
-  }
+  })
 );

@@ -17,6 +17,7 @@ import {
   ServerFunctionError,
   SERVER_ERROR_CODES,
 } from '../types/contracts';
+import { withErrorHandling } from '../system/errorWrapper';
 
 const db = getAdminFirestore();
 
@@ -24,7 +25,7 @@ const db = getAdminFirestore();
  * 7. requestRoll
  */
 export const requestRoll = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ diceCount?: number }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ diceCount?: number }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
     RateLimiter.check(auth.userId, 'rollDice');
@@ -179,14 +180,14 @@ export const requestRoll = onCall(
       data: result,
     };
     return response;
-  }
+  })
 );
 
 /**
  * 8. submitMovementDecision
  */
 export const submitMovementDecision = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ chosenTargetSpace: number }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ chosenTargetSpace: number }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
 
@@ -225,14 +226,14 @@ export const submitMovementDecision = onCall(
       stateVersion: result.stateVersion,
       data: result,
     };
-  }
+  })
 );
 
 /**
  * 9. executeSPAction
  */
 export const executeSPAction = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ actionId: string; spCost: number; targetPlayerId?: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ actionId: string; spCost: number; targetPlayerId?: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
     RateLimiter.check(auth.userId, 'spAction');
@@ -296,14 +297,14 @@ export const executeSPAction = onCall(
       stateVersion: result.stateVersion,
       data: result,
     };
-  }
+  })
 );
 
 /**
  * 10. completeTurn
  */
 export const completeTurn = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<Record<string, never>>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<Record<string, never>>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
 
@@ -368,14 +369,14 @@ export const completeTurn = onCall(
       stateVersion: result.stateVersion,
       data: result,
     };
-  }
+  })
 );
 
 /**
  * 11. buyProperty
  */
 export const buyProperty = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ spaceId?: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ spaceId?: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
 
@@ -466,14 +467,14 @@ export const buyProperty = onCall(
       stateVersion: result.stateVersion,
       data: result,
     };
-  }
+  })
 );
 
 /**
  * 12. startSpaceAuction
  */
 export const startSpaceAuction = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<Record<string, never>>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<Record<string, never>>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
 
@@ -543,14 +544,14 @@ export const startSpaceAuction = onCall(
       stateVersion: result.stateVersion,
       data: result,
     };
-  }
+  })
 );
 
 /**
  * 13. executeBotTurn
  */
 export const executeBotTurn = onCall(
-  async (request: CallableRequest<ServerRequestEnvelope<{ botId?: string }>>) => {
+  withErrorHandling(async (request: CallableRequest<ServerRequestEnvelope<{ botId?: string }>>) => {
     const auth = AuthGuard.assertAuthenticated(request);
     AppCheckGuard.verify(request);
 
@@ -682,6 +683,6 @@ export const executeBotTurn = onCall(
       serverTime: Date.now(),
       data: result,
     };
-  }
+  })
 );
 

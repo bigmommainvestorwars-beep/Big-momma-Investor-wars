@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Dices, Sparkles, Zap } from 'lucide-react';
-import { ThreeDiceScene, type DiceMaterialType } from './dice/ThreeDiceScene';
+import { ThreeDiceScene, type DiceMaterialType, type DiceSkinId } from './dice/ThreeDiceScene';
 
 export interface DiceVisualizerProps {
   lastRoll?: [number, number] | null;
@@ -11,6 +11,8 @@ export interface DiceVisualizerProps {
   disabledReason?: string;
   onAnimationComplete?: (result: number) => void;
   initialMaterial?: DiceMaterialType;
+  equippedSkin?: DiceSkinId;
+  onSkinChange?: (skin: DiceSkinId) => void;
 }
 
 /**
@@ -40,6 +42,8 @@ export const DiceVisualizer: React.FC<DiceVisualizerProps> = ({
   disabledReason,
   onAnimationComplete,
   initialMaterial = 'glossy-plastic',
+  equippedSkin,
+  onSkinChange,
 }) => {
   const [isPressed, setIsPressed] = useState(false);
   const [internalRoll, setInternalRoll] = useState<[number, number] | null>(null);
@@ -108,6 +112,8 @@ export const DiceVisualizer: React.FC<DiceVisualizerProps> = ({
             onRoll={handleButtonClick}
             onAnimationComplete={handleAnimationComplete}
             initialMaterial={initialMaterial}
+            equippedSkin={equippedSkin}
+            onSkinChange={onSkinChange}
           />
         </div>
 
