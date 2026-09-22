@@ -17,6 +17,7 @@ import {
   where,
   limit,
   addDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import { getFirebaseAuth, getFirebaseFirestore } from './config';
 import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../../config/testRoomConfig';
@@ -556,13 +557,6 @@ export class CloudFunctionsClient {
           const newCash = (pData?.cash ?? 1500) + (passedGo ? 200 : 0);
           const newNetWorth = (pData?.netWorth ?? 1500) + (passedGo ? 200 : 0);
 
-          await updateDoc(pDocRef, {
-            currentSpaceIndex: newSpace,
-            cash: newCash,
-            netWorth: newNetWorth,
-            lastActiveAt: Date.now(),
-          });
-
           const targetSpace = DEFAULT_STANDARD_SPACES[newSpace] || {
             id: `space_${newSpace}`,
             index: newSpace,
@@ -580,12 +574,22 @@ export class CloudFunctionsClient {
             }
           }
 
-          await updateDoc(doc(db, 'matches', matchId), {
+          const batch = writeBatch(db);
+          batch.update(pDocRef, {
+            currentSpaceIndex: newSpace,
+            cash: newCash,
+            netWorth: newNetWorth,
+            lastActiveAt: Date.now(),
+          });
+
+          batch.update(doc(db, 'matches', matchId), {
             lastRoll: [d1, d2],
             lastRollPlayerId: user.uid,
             currentPhase: nextPhase,
             updatedAt: Date.now(),
           });
+
+          await batch.commit();
 
           await addDoc(collection(db, 'matches', matchId, 'logs'), {
             id: `log_${Date.now()}`,
@@ -620,7 +624,8 @@ export class CloudFunctionsClient {
           const newTurn = (mData.turnNumber || 0) + 1;
           const newRound = Math.floor(newTurn / Math.max(1, pDocs.length)) + 1;
 
-          await updateDoc(mDocRef, {
+          const batch = writeBatch(db);
+          batch.update(mDocRef, {
             currentPlayerId: nextPlayer ? nextPlayer.id : user.uid,
             turnNumber: newTurn,
             roundNumber: newRound,
@@ -630,6 +635,13 @@ export class CloudFunctionsClient {
             updatedAt: Date.now(),
             stateVersion: (mData.stateVersion || 1) + 1,
           });
+
+          const curPlayerDocRef = doc(db, 'matches', matchId, 'players', user.uid);
+          batch.update(curPlayerDocRef, {
+            lastActiveAt: Date.now(),
+          });
+
+          await batch.commit();
 
           if (nextPlayer) {
             await addDoc(collection(db, 'matches', matchId, 'logs'), {
@@ -655,16 +667,19 @@ export class CloudFunctionsClient {
           const owned = pData.ownedSpaceIds || [];
 
           if (!owned.includes(spaceId)) {
-            await updateDoc(pDocRef, {
+            const batch = writeBatch(db);
+            batch.update(pDocRef, {
               ownedSpaceIds: [...owned, spaceId],
               cash: Math.max(0, (pData.cash ?? 1500) - 150),
               lastActiveAt: Date.now(),
             });
 
-            await updateDoc(doc(db, 'matches', matchId), {
+            batch.update(doc(db, 'matches', matchId), {
               currentPhase: 'TURN_END',
               updatedAt: Date.now(),
             });
+
+            await batch.commit();
 
             await addDoc(collection(db, 'matches', matchId, 'logs'), {
               id: `log_${Date.now()}`,
@@ -708,13 +723,16 @@ export class CloudFunctionsClient {
             const pSnap = await getDocs(collection(db, 'matches', matchId, 'players'));
             botDoc.turnOrder = pSnap.size;
 
-            await setDoc(doc(db, 'matches', matchId, 'players', botId), botDoc);
             const mSnap = await getDoc(doc(db, 'matches', matchId));
             const currentParts = (mSnap.data()?.participantUserIds as string[]) || [];
-            await updateDoc(doc(db, 'matches', matchId), {
+
+            const batch = writeBatch(db);
+            batch.set(doc(db, 'matches', matchId, 'players', botId), botDoc);
+            batch.update(doc(db, 'matches', matchId), {
               participantUserIds: Array.from(new Set([...currentParts, botId])),
               updatedAt: Date.now(),
             });
+            await batch.commit();
           } catch (err) {
             console.warn('[CloudFunctionsClient:addBotPlayer] note:', err);
           }
@@ -728,13 +746,16 @@ export class CloudFunctionsClient {
         const targetId = p.targetPlayerId || p.botId;
         if (targetId && db) {
           try {
-            await deleteDoc(doc(db, 'matches', matchId, 'players', targetId));
             const mSnap = await getDoc(doc(db, 'matches', matchId));
             const currentParts = (mSnap.data()?.participantUserIds as string[]) || [];
-            await updateDoc(doc(db, 'matches', matchId), {
+
+            const batch = writeBatch(db);
+            batch.delete(doc(db, 'matches', matchId, 'players', targetId));
+            batch.update(doc(db, 'matches', matchId), {
               participantUserIds: currentParts.filter((id) => id !== targetId),
               updatedAt: Date.now(),
             });
+            await batch.commit();
           } catch (err) {
             console.warn('[CloudFunctionsClient:removePlayer] note:', err);
           }
@@ -788,15 +809,18 @@ export class CloudFunctionsClient {
       case 'leaveMatch': {
         if (matchId && db) {
           try {
-            await deleteDoc(doc(db, 'matches', matchId, 'players', user.uid));
             const mSnap = await getDoc(doc(db, 'matches', matchId));
             const currentParts = (mSnap.data()?.participantUserIds as string[]) || [];
             const remaining = currentParts.filter((id) => id !== user.uid);
-            await updateDoc(doc(db, 'matches', matchId), {
+
+            const batch = writeBatch(db);
+            batch.delete(doc(db, 'matches', matchId, 'players', user.uid));
+            batch.update(doc(db, 'matches', matchId), {
               participantUserIds: remaining,
               status: remaining.length === 0 ? 'abandoned' : 'waiting_for_players',
               updatedAt: Date.now(),
             });
+            await batch.commit();
           } catch {}
         }
         return { success: true } as TRes;
@@ -874,14 +898,38 @@ export class CloudFunctionsClient {
               }
             }
 
-            // Update bot player document
-            await updateDoc(botDocRef, {
+            // Compute next player
+            const activePlayers = allPlayers.filter((pl) => pl.status === 'active' || pl.status === 'disconnected');
+            activePlayers.sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
+            const curIdx = activePlayers.findIndex((pl) => pl.id === targetBotId);
+            const nextIdx = curIdx >= 0 ? (curIdx + 1) % activePlayers.length : 0;
+            const nextPlayer = activePlayers[nextIdx] || activePlayers[0];
+
+            const newTurn = (mData.turnNumber || 0) + 1;
+            const newRound = Math.floor(newTurn / Math.max(1, activePlayers.length)) + 1;
+
+            // Atomically update bot player document and match document
+            const batch = writeBatch(db);
+            batch.update(botDocRef, {
               currentSpaceIndex: newSpace,
               cash: updatedCash,
               netWorth: updatedNetWorth,
               ownedSpaceIds: updatedOwnedSpaces,
               lastActiveAt: Date.now(),
             });
+
+            batch.update(mDocRef, {
+              currentPlayerId: nextPlayer.id,
+              turnNumber: newTurn,
+              roundNumber: newRound,
+              currentPhase: 'TURN_START',
+              lastRoll: [d1, d2],
+              lastRollPlayerId: targetBotId,
+              stateVersion: (mData.stateVersion || 1) + 1,
+              updatedAt: Date.now(),
+            });
+
+            await batch.commit();
 
             if (boughtProperty) {
               await addDoc(collection(db, 'matches', matchId, 'logs'), {
@@ -893,28 +941,6 @@ export class CloudFunctionsClient {
                 timestamp: Date.now(),
               });
             }
-
-            // Compute next player
-            const activePlayers = allPlayers.filter((pl) => pl.status === 'active' || pl.status === 'disconnected');
-            activePlayers.sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
-            const curIdx = activePlayers.findIndex((pl) => pl.id === targetBotId);
-            const nextIdx = curIdx >= 0 ? (curIdx + 1) % activePlayers.length : 0;
-            const nextPlayer = activePlayers[nextIdx] || activePlayers[0];
-
-            const newTurn = (mData.turnNumber || 0) + 1;
-            const newRound = Math.floor(newTurn / Math.max(1, activePlayers.length)) + 1;
-
-            // Update match document
-            await updateDoc(mDocRef, {
-              currentPlayerId: nextPlayer.id,
-              turnNumber: newTurn,
-              roundNumber: newRound,
-              currentPhase: 'TURN_START',
-              lastRoll: [d1, d2],
-              lastRollPlayerId: targetBotId,
-              stateVersion: (mData.stateVersion || 1) + 1,
-              updatedAt: Date.now(),
-            });
 
             // Add roll log
             await addDoc(collection(db, 'matches', matchId, 'logs'), {
