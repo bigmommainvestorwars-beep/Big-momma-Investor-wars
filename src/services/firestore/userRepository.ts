@@ -47,15 +47,6 @@ export class UserRepository {
     await setDoc(userRef, user, { merge: true });
   }
 
-  public async updateUserDisplayName(userId: string, displayName: string): Promise<void> {
-    try {
-      const userRef = doc(this.getDb(), 'users', userId);
-      await setDoc(userRef, { displayName, updatedAt: Date.now() }, { merge: true });
-    } catch (e) {
-      console.warn('[UserRepository] updateUserDisplayName notice:', e);
-    }
-  }
-
   public async updateUserProfile(userId: string, profile: Partial<UserProfile>): Promise<void> {
     const userRef = doc(this.getDb(), 'users', userId);
     await updateDoc(userRef, {

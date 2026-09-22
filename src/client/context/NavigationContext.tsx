@@ -15,9 +15,6 @@ export type Screen =
   | 'RESULTS' 
   | 'PROFILE' 
   | 'SETTINGS'
-  | 'RANKED'
-  | 'SOCIAL'
-  | 'STORE'
   | 'RECOVERY'
   | 'ERROR';
 
@@ -66,23 +63,21 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
       if (currentScreen !== 'AUTH' && currentScreen !== 'SPLASH') {
         setHistory(['AUTH']); // Reset history to AUTH if logged out
       } else if (currentScreen === 'SPLASH') {
-        setHistory(['AUTH']);
+        navigate('AUTH');
       }
       return;
     }
 
-    // 3. Authenticated logic: immediately route from AUTH or SPLASH to HOME or active match
-    if (user && (currentScreen === 'SPLASH' || currentScreen === 'AUTH')) {
-      // Check if we have an active match in progress
+    // 3. Authenticated logic
+    if (user && currentScreen === 'SPLASH') {
+      // Check if we have an active match
       if (activeMatchId && match) {
         if (match.status === 'completed') {
           setHistory(['HOME', 'GAME_OVER']);
         } else if (match.status === 'waiting_for_players') {
-          setHistory(['HOME', 'LOBBY']);
-        } else if (match.status === 'in_progress' || match.status === 'active') {
-          setHistory(['HOME', 'GAMEPLAY']);
+          setHistory(['HOME', 'RECOVERY']);
         } else {
-          setHistory(['HOME']);
+          setHistory(['HOME', 'RECOVERY']);
         }
       } else {
         setHistory(['HOME']);
@@ -93,7 +88,7 @@ export const NavigationProvider: React.FC<{ children: ReactNode }> = ({ children
     if (activeMatchId && match) {
       if (match.status === 'completed' && currentScreen !== 'GAME_OVER' && currentScreen !== 'RESULTS') {
         navigate('GAME_OVER');
-      } else if ((match.status === 'in_progress' || match.status === 'active') && (currentScreen === 'LOBBY' || currentScreen === 'MATCH_SETUP')) {
+      } else if (match.status === 'in_progress' && (currentScreen === 'LOBBY' || currentScreen === 'MATCH_SETUP')) {
         navigate('GAMEPLAY');
       }
     } else if (!activeMatchId && currentScreen === 'GAMEPLAY') {

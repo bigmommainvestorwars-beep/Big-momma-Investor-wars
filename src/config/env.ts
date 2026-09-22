@@ -4,8 +4,6 @@
  * and prevents leaking server-side credentials to the client.
  */
 
-import firebaseAppletConfig from '../../firebase-applet-config.json';
-
 export type AppEnvironment = 'development' | 'staging' | 'production';
 
 export interface FirebaseClientConfig {
@@ -28,22 +26,10 @@ export interface ClientEnvConfig {
   firebase: FirebaseClientConfig;
 }
 
-// Static variable extraction for Vite production build-time inlining
-const viteApiKey = typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_API_KEY ? String(import.meta.env.VITE_FIREBASE_API_KEY) : '';
-const viteAuthDomain = typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_AUTH_DOMAIN ? String(import.meta.env.VITE_FIREBASE_AUTH_DOMAIN) : '';
-const viteProjectId = typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_PROJECT_ID ? String(import.meta.env.VITE_FIREBASE_PROJECT_ID) : '';
-const viteStorageBucket = typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_STORAGE_BUCKET ? String(import.meta.env.VITE_FIREBASE_STORAGE_BUCKET) : '';
-const viteSenderId = typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_MESSAGING_SENDER_ID ? String(import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID) : '';
-const viteAppId = typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIREBASE_APP_ID ? String(import.meta.env.VITE_FIREBASE_APP_ID) : '';
-const viteDbId = typeof import.meta !== 'undefined' && import.meta.env?.VITE_FIRESTORE_DATABASE_ID ? String(import.meta.env.VITE_FIRESTORE_DATABASE_ID) : '';
-const viteAppEnv = typeof import.meta !== 'undefined' && import.meta.env?.VITE_APP_ENV ? String(import.meta.env.VITE_APP_ENV) : '';
-const viteAppUrl = typeof import.meta !== 'undefined' && import.meta.env?.APP_URL ? String(import.meta.env.APP_URL) : '';
-const viteUseEmulator = typeof import.meta !== 'undefined' && import.meta.env?.VITE_USE_FIREBASE_EMULATOR ? String(import.meta.env.VITE_USE_FIREBASE_EMULATOR) : '';
-
 function getEnvVar(key: string, fallback = ''): string {
   try {
-    if (typeof import.meta !== 'undefined' && import.meta.env && (import.meta.env as any)[key] !== undefined) {
-      return String((import.meta.env as any)[key]);
+    if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env[key] !== undefined) {
+      return String(import.meta.env[key]);
     }
   } catch {
     // Ignore in non-Vite execution contexts
@@ -55,7 +41,7 @@ function getEnvVar(key: string, fallback = ''): string {
 }
 
 function resolveEnvironment(): AppEnvironment {
-  const envMode = (viteAppEnv || getEnvVar('VITE_APP_ENV') || getEnvVar('NODE_ENV') || getEnvVar('MODE')).toLowerCase();
+  const envMode = (getEnvVar('VITE_APP_ENV') || getEnvVar('NODE_ENV') || getEnvVar('MODE')).toLowerCase();
   if (envMode === 'production' || envMode === 'prod') return 'production';
   if (envMode === 'staging' || envMode === 'stage') return 'staging';
   return 'development';
@@ -65,19 +51,19 @@ const currentEnv = resolveEnvironment();
 
 export const ENV: ClientEnvConfig = {
   appEnv: currentEnv,
-  appUrl: viteAppUrl || getEnvVar('APP_URL') || (typeof window !== 'undefined' ? window.location.origin : ''),
+  appUrl: getEnvVar('APP_URL') || (typeof window !== 'undefined' ? window.location.origin : ''),
   isProduction: currentEnv === 'production',
   isStaging: currentEnv === 'staging',
   isDevelopment: currentEnv === 'development',
-  useEmulator: (viteUseEmulator || getEnvVar('VITE_USE_FIREBASE_EMULATOR')) === 'true',
+  useEmulator: getEnvVar('VITE_USE_FIREBASE_EMULATOR') === 'true',
   firebase: {
-    apiKey: viteApiKey || getEnvVar('VITE_FIREBASE_API_KEY', firebaseAppletConfig?.apiKey || ''),
-    authDomain: viteAuthDomain || getEnvVar('VITE_FIREBASE_AUTH_DOMAIN', firebaseAppletConfig?.authDomain || ''),
-    projectId: viteProjectId || getEnvVar('VITE_FIREBASE_PROJECT_ID', firebaseAppletConfig?.projectId || ''),
-    storageBucket: viteStorageBucket || getEnvVar('VITE_FIREBASE_STORAGE_BUCKET', firebaseAppletConfig?.storageBucket || ''),
-    messagingSenderId: viteSenderId || getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID', firebaseAppletConfig?.messagingSenderId || ''),
-    appId: viteAppId || getEnvVar('VITE_FIREBASE_APP_ID', firebaseAppletConfig?.appId || ''),
-    firestoreDatabaseId: viteDbId || getEnvVar('VITE_FIRESTORE_DATABASE_ID', firebaseAppletConfig?.firestoreDatabaseId || '(default)'),
+    apiKey: getEnvVar('VITE_FIREBASE_API_KEY'),
+    authDomain: getEnvVar('VITE_FIREBASE_AUTH_DOMAIN'),
+    projectId: getEnvVar('VITE_FIREBASE_PROJECT_ID'),
+    storageBucket: getEnvVar('VITE_FIREBASE_STORAGE_BUCKET'),
+    messagingSenderId: getEnvVar('VITE_FIREBASE_MESSAGING_SENDER_ID'),
+    appId: getEnvVar('VITE_FIREBASE_APP_ID'),
+    firestoreDatabaseId: '(default)',
   },
 };
 

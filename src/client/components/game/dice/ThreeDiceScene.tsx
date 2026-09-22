@@ -1,7 +1,7 @@
 import React, { useRef, useMemo, useState, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { Volume2, VolumeX, Sparkles, ChevronDown, Dices, Sliders, Unlock } from 'lucide-react';
+import { Volume2, VolumeX } from 'lucide-react';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { createDiceFaceTextures, type DiceMaterialType } from './DiceTextures';
@@ -15,16 +15,9 @@ import {
   stepDicePhysics,
   type DicePhysicsState,
 } from './dicePhysics';
-import {
-  DiceSkinManager,
-  type DiceSkinId,
-  DICE_SKINS,
-  DICE_SKIN_LIST,
-} from '../../../../services/cosmetics/diceSkins';
-import { DeveloperDiceStudioModal } from './DeveloperDiceStudioModal';
 
 export { FACE_EULER_ANGLES, diceAudio };
-export type { DiceMaterialType, DiceSkinId };
+export type { DiceMaterialType };
 
 export interface ThreeDiceSceneProps {
   lastRoll: [number, number] | null;
@@ -33,9 +26,6 @@ export interface ThreeDiceSceneProps {
   onRoll: () => void;
   onAnimationComplete?: (result: number) => void;
   initialMaterial?: DiceMaterialType;
-  equippedSkin?: DiceSkinId;
-  onSkinChange?: (skin: DiceSkinId) => void;
-  hideStudioModal?: boolean;
 }
 
 /**
@@ -226,34 +216,9 @@ function CameraController({ isRolling, animTime, dicePosRef }: CameraControllerP
  * Radiant Result Glow Effect on Pedestal
  * Dynamic visibility ensures zero render passes when inactive
  */
-function PedestalGlow({
-  glowIntensity,
-  isMobile,
-  materialType,
-}: {
-  glowIntensity: number;
-  isMobile: boolean;
-  materialType: DiceMaterialType;
-}) {
+function PedestalGlow({ glowIntensity, isMobile }: { glowIntensity: number; isMobile: boolean }) {
   const ringRef = useRef<THREE.Mesh>(null);
   const pointLightRef = useRef<THREE.PointLight>(null);
-
-  const glowColors = useMemo(() => {
-    switch (materialType) {
-      case 'obsidian-gold':
-        return { ring: '#f59e0b', light: '#fbbf24' };
-      case 'neon-cyberpunk':
-        return { ring: '#00f0ff', light: '#38bdf8' };
-      case 'emerald-vip':
-        return { ring: '#10b981', light: '#6ee7b7' };
-      case 'ivory':
-        return { ring: '#f59e0b', light: '#fde68a' };
-      case 'crystal-ruby':
-      case 'glossy-plastic':
-      default:
-        return { ring: '#f43f5e', light: '#fb7185' };
-    }
-  }, [materialType]);
 
   useFrame(() => {
     if (glowIntensity <= 0.005) return;
@@ -273,13 +238,13 @@ function PedestalGlow({
     <group position={[0, -0.7742, 0]} rotation={[-Math.PI / 2, 0, 0]}>
       <mesh ref={ringRef}>
         <ringGeometry args={[0.35, 1.85, isMobile ? 24 : 48]} />
-        <meshBasicMaterial color={glowColors.ring} transparent opacity={0} depthWrite={false} />
+        <meshBasicMaterial color="#10b981" transparent opacity={0} depthWrite={false} />
       </mesh>
       <pointLight
         ref={pointLightRef}
         position={[0, 0, 0.4]}
         intensity={0}
-        color={glowColors.light}
+        color="#34d399"
         distance={isMobile ? 5 : 6}
       />
     </group>
@@ -311,74 +276,20 @@ function getSharedDiceMaterials(materialType: DiceMaterialType, isMobile: boolea
     const bumpMap = texturePkg.bumpMaps[faceNum - 1];
     const roughnessMap = texturePkg.roughnessMaps[faceNum - 1];
 
-    if (materialType === 'obsidian-gold') {
-      // Obsidian & 24K Gold: Ultra-dense volcanic glass with golden specular sheen
-      return new THREE.MeshPhysicalMaterial({
-        map: colorMap,
-        bumpMap: bumpMap,
-        bumpScale: 0.06,
-        roughnessMap: roughnessMap,
-        roughness: 0.06,
-        metalness: 0.15,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.02,
-        reflectivity: 0.98,
-        ior: 1.62,
-        sheen: 0.5,
-        sheenColor: new THREE.Color('#fbbf24'),
-        specularIntensity: 1.0,
-        specularColor: new THREE.Color('#fffbeb'),
-      });
-    } else if (materialType === 'neon-cyberpunk') {
-      // Neon Cyberpunk: Matte nano-carbon matrix with neon emissive glow
-      return new THREE.MeshPhysicalMaterial({
-        map: colorMap,
-        bumpMap: bumpMap,
-        bumpScale: 0.065,
-        roughnessMap: roughnessMap,
-        roughness: 0.2,
-        metalness: 0.08,
-        clearcoat: 0.85,
-        clearcoatRoughness: 0.08,
-        reflectivity: 0.85,
-        emissive: new THREE.Color('#00f0ff'),
-        emissiveMap: colorMap,
-        emissiveIntensity: 0.35,
-        specularIntensity: 1.0,
-        specularColor: new THREE.Color('#67e8f9'),
-      });
-    } else if (materialType === 'emerald-vip') {
-      // Emerald VIP: Imperial translucent jadeite crystal with 24K gold accents
-      return new THREE.MeshPhysicalMaterial({
-        map: colorMap,
-        bumpMap: bumpMap,
-        bumpScale: 0.055,
-        roughnessMap: roughnessMap,
-        roughness: 0.09,
-        metalness: 0.05,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.03,
-        transmission: isMobile ? 0.20 : 0.30,
-        thickness: 1.2,
-        reflectivity: 0.95,
-        ior: 1.61,
-        specularIntensity: 1.0,
-        specularColor: new THREE.Color('#d1fae5'),
-      });
-    } else if (materialType === 'ivory') {
+    if (materialType === 'ivory') {
       // Luxury Polished Ivory / Porcelain with thick glossy clearcoat
       return new THREE.MeshPhysicalMaterial({
         map: colorMap,
         bumpMap: bumpMap,
-        bumpScale: 0.055,
+        bumpScale: 0.055, // Real physical surface relief for recessed pips
         roughnessMap: roughnessMap,
-        roughness: 0.12,
-        metalness: 0.0,
-        clearcoat: 1.0,
-        clearcoatRoughness: 0.04,
+        roughness: 0.12, // Soft micro-roughness for silky soft reflections
+        metalness: 0.0, // Pure dielectric ivory
+        clearcoat: 1.0, // Thick liquid-glass lacquer coat
+        clearcoatRoughness: 0.04, // Mirror-smooth clearcoat
         reflectivity: 0.9,
-        ior: 1.54,
-        sheen: 0.4,
+        ior: 1.54, // Refractive index of acrylic / ivory resin
+        sheen: 0.4, // Subtle warm ivory sheen on grazing angles
         sheenColor: new THREE.Color('#fff9eb'),
         specularIntensity: 1.0,
         specularColor: new THREE.Color('#ffffff'),
@@ -394,7 +305,7 @@ function getSharedDiceMaterials(materialType: DiceMaterialType, isMobile: boolea
         metalness: 0.02,
         clearcoat: 1.0,
         clearcoatRoughness: 0.03,
-        transmission: isMobile ? 0.18 : 0.25,
+        transmission: isMobile ? 0.18 : 0.25, // Mobile-optimized transmission shader
         thickness: 1.2,
         reflectivity: 0.95,
         ior: 1.58,
@@ -637,36 +548,6 @@ function PhysicalDiceCube({
   );
 }
 
-const skinToMaterialType = (skinId: DiceSkinId): DiceMaterialType => {
-  switch (skinId) {
-    case 'obsidian-gold':
-      return 'obsidian-gold';
-    case 'neon-cyberpunk':
-      return 'neon-cyberpunk';
-    case 'crystal-ruby':
-      return 'crystal-ruby';
-    case 'ivory':
-      return 'ivory';
-    case 'emerald-vip':
-      return 'emerald-vip';
-    default:
-      return 'glossy-plastic';
-  }
-};
-
-const safePointerEvents = (_store: any): any => ({
-  enabled: true,
-  priority: 1,
-  connected: false,
-  handlers: {},
-  connect: (target?: any) => {
-    if (!target || typeof target.addEventListener !== 'function') return;
-  },
-  disconnect: () => {},
-  update: () => {},
-  compute: () => {},
-});
-
 export const ThreeDiceScene: React.FC<ThreeDiceSceneProps> = ({
   lastRoll,
   isRolling,
@@ -674,43 +555,13 @@ export const ThreeDiceScene: React.FC<ThreeDiceSceneProps> = ({
   onRoll,
   onAnimationComplete,
   initialMaterial = 'glossy-plastic',
-  equippedSkin,
-  onSkinChange,
-  hideStudioModal = false,
 }) => {
-  const [equippedSkinId, setEquippedSkinId] = useState<DiceSkinId>(() => {
-    if (equippedSkin) return equippedSkin;
-    return DiceSkinManager.getEffectiveSkin();
-  });
-  const [showSkinMenu, setShowSkinMenu] = useState(false);
-  const [showStudioModal, setShowStudioModal] = useState(false);
+  const [materialType, setMaterialType] = useState<DiceMaterialType>(initialMaterial);
   const [isMuted, setIsMuted] = useState(diceAudio.getMuted());
+  const [pointer, setPointer] = useState({ x: 0, y: 0 });
   const [glowIntensity, setGlowIntensity] = useState(0);
   const [animTime, setAnimTime] = useState(0);
   const dicePosRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 0, 0));
-
-  // Sync with prop if provided
-  useEffect(() => {
-    if (equippedSkin && equippedSkin !== equippedSkinId) {
-      setEquippedSkinId(equippedSkin);
-    }
-  }, [equippedSkin]);
-
-  // Subscribe to DiceSkinManager updates (e.g. from ProfileScreen or Developer Studio)
-  useEffect(() => {
-    const unsub = DiceSkinManager.subscribe((newSkin) => {
-      setEquippedSkinId(newSkin);
-    });
-    return unsub;
-  }, []);
-
-  const currentMaterialType: DiceMaterialType = useMemo(() => {
-    return skinToMaterialType(equippedSkinId);
-  }, [equippedSkinId]);
-
-  const activeSkinMeta = useMemo(() => {
-    return DICE_SKINS[equippedSkinId] || DICE_SKINS['obsidian-gold'];
-  }, [equippedSkinId]);
 
   // Determine mobile environment for 60 FPS performance tuning (iPhone & Android)
   const isMobile = useMemo(() => isMobileDevice(), []);
@@ -720,8 +571,8 @@ export const ThreeDiceScene: React.FC<ThreeDiceSceneProps> = ({
 
   // Shared PBR materials across both dice
   const sharedMaterials = useMemo(
-    () => getSharedDiceMaterials(currentMaterialType, isMobile),
-    [currentMaterialType, isMobile]
+    () => getSharedDiceMaterials(materialType, isMobile),
+    [materialType, isMobile]
   );
 
   // Shared contact shadow texture & geometry
@@ -731,24 +582,11 @@ export const ThreeDiceScene: React.FC<ThreeDiceSceneProps> = ({
     []
   );
 
-  const handleSelectSkin = (skinId: DiceSkinId) => {
-    const result = DiceSkinManager.equipSkin(skinId);
-    if (result.success) {
-      setEquippedSkinId(skinId);
-      if (onSkinChange) onSkinChange(skinId);
-    }
-    setShowSkinMenu(false);
-  };
-
   return (
     <div
       className="relative w-full h-44 sm:h-48 select-none touch-none"
       style={{ WebkitTapHighlightColor: 'transparent', touchAction: 'none' }}
       onClick={() => {
-        if (showSkinMenu) {
-          setShowSkinMenu(false);
-          return;
-        }
         if (canRoll && !isRolling) onRoll();
       }}
       onTouchStart={() => {
@@ -756,9 +594,9 @@ export const ThreeDiceScene: React.FC<ThreeDiceSceneProps> = ({
         diceAudio.getMuted();
       }}
     >
-      {/* Premium Toolbar: Sound FX Toggle & Custom Dice Skin Switcher */}
+      {/* Premium Toolbar: Sound FX Toggle & Material Selector (Polished Ivory vs Vegas Glossy Ruby) */}
       <div
-        className="absolute top-2 right-2 z-20 flex items-center gap-1.5 bg-slate-900/90 backdrop-blur-md border border-slate-700/60 rounded-lg p-1 text-xs shadow-lg"
+        className="absolute top-2 right-2 z-10 flex items-center gap-1.5 bg-slate-900/85 backdrop-blur-md border border-slate-700/60 rounded-lg p-0.5 text-xs shadow-md"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Sound FX Mute / Unmute Toggle */}
@@ -780,107 +618,35 @@ export const ThreeDiceScene: React.FC<ThreeDiceSceneProps> = ({
           {isMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
         </button>
 
-        {!hideStudioModal && (
-          <>
-            <div className="w-px h-3.5 bg-slate-700/60" />
-            <button
-              type="button"
-              onClick={() => setShowStudioModal(true)}
-              className="px-1.5 py-0.5 rounded text-amber-400 hover:text-amber-300 hover:bg-slate-800 transition-colors flex items-center gap-1 font-mono text-[10px]"
-              title="Open Developer Dice Theme Studio"
-            >
-              <Dices className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Studio</span>
-            </button>
-          </>
-        )}
-
         <div className="w-px h-3.5 bg-slate-700/60" />
 
-        {/* Dice Skin Selector Button */}
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setShowSkinMenu(!showSkinMenu)}
-            className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/60 transition-all text-[11px] font-medium"
-            title="Switch Custom 3D Dice Skin"
-          >
-            <Sparkles className="w-3 h-3 text-amber-400" />
-            <span className="truncate max-w-[100px] sm:max-w-none">{activeSkinMeta.name}</span>
-            <ChevronDown className="w-3 h-3 text-slate-400" />
-          </button>
-
-          {/* Skin Selection Dropdown Menu */}
-          {showSkinMenu && (
-            <div className="absolute top-full right-0 mt-1 w-56 bg-slate-900 border border-slate-700/80 rounded-lg shadow-2xl p-1.5 z-30 flex flex-col gap-1 max-h-64 overflow-y-auto">
-              <div className="px-2 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-800 flex items-center justify-between">
-                <span>Dice Themes</span>
-                {DiceSkinManager.isDeveloperMode() && (
-                  <span className="text-[9px] font-mono text-emerald-400 font-bold">DEV ACTIVE</span>
-                )}
-              </div>
-              {DICE_SKIN_LIST.map((skin) => {
-                const isUnlocked = DiceSkinManager.isSkinUnlocked(skin.id);
-                const isEquipped = skin.id === equippedSkinId;
-                return (
-                  <button
-                    key={skin.id}
-                    type="button"
-                    disabled={!isUnlocked && !DiceSkinManager.isDeveloperMode()}
-                    onClick={() => handleSelectSkin(skin.id)}
-                    className={`w-full flex items-center justify-between px-2 py-1.5 rounded text-left transition-all text-xs cursor-pointer ${
-                      isEquipped
-                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 font-semibold'
-                        : isUnlocked
-                        ? 'hover:bg-slate-800 text-slate-300'
-                        : 'opacity-50 text-slate-500 cursor-not-allowed'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 truncate">
-                      <span className="text-base">{skin.badgeIcon}</span>
-                      <div className="truncate">
-                        <div className="truncate font-medium flex items-center gap-1.5">
-                          <span>{skin.name}</span>
-                          {!skin.unlockedByDefault && DiceSkinManager.isDeveloperMode() && (
-                            <span className="text-[9px] font-mono font-bold text-amber-400 bg-amber-500/10 px-1 py-0.2 rounded">
-                              DEV
-                            </span>
-                          )}
-                        </div>
-                        {!isUnlocked && !DiceSkinManager.isDeveloperMode() && (
-                          <div className="text-[10px] text-amber-400/80">{skin.unlockCriteria}</div>
-                        )}
-                      </div>
-                    </div>
-                    {isEquipped && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
-                    )}
-                  </button>
-                );
-              })}
-
-              {!hideStudioModal && (
-                <div className="p-1 border-t border-slate-800 mt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowSkinMenu(false);
-                      setShowStudioModal(true);
-                    }}
-                    className="w-full py-1.5 px-2 rounded bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold tracking-wider uppercase flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Dices className="w-3.5 h-3.5" />
-                    <span>Open Theme Studio</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={() => setMaterialType('ivory')}
+          className={`px-2 py-0.5 rounded transition-all font-medium ${
+            materialType === 'ivory'
+              ? 'bg-amber-100 text-slate-900 shadow-sm font-semibold'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+          title="Polished Ivory with 24K Gold Trim & Recessed Onyx Pips"
+        >
+          Polished Ivory
+        </button>
+        <button
+          type="button"
+          onClick={() => setMaterialType('glossy-plastic')}
+          className={`px-2 py-0.5 rounded transition-all font-medium ${
+            materialType === 'glossy-plastic'
+              ? 'bg-rose-600 text-white shadow-sm font-semibold'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+          title="Vegas Casino Candy Ruby Plastic"
+        >
+          Glossy Ruby
+        </button>
       </div>
 
       <Canvas
-        events={safePointerEvents}
         shadows
         dpr={isMobile ? [1, 1.6] : [1, 2]}
         gl={{
@@ -982,11 +748,7 @@ export const ThreeDiceScene: React.FC<ThreeDiceSceneProps> = ({
         </group>
 
         {/* Step 15: Pedestal Glow Effect */}
-        <PedestalGlow
-          glowIntensity={glowIntensity}
-          isMobile={isMobile}
-          materialType={currentMaterialType}
-        />
+        <PedestalGlow glowIntensity={glowIntensity} isMobile={isMobile} />
 
         {/* The 3D Dice Physical Cubes with Rounded Corners & PBR Shading */}
         <PhysicalDiceCube
@@ -1016,17 +778,6 @@ export const ThreeDiceScene: React.FC<ThreeDiceSceneProps> = ({
           dieIndex={1}
         />
       </Canvas>
-
-      {!hideStudioModal && (
-        <DeveloperDiceStudioModal
-          isOpen={showStudioModal}
-          onClose={() => setShowStudioModal(false)}
-          onSkinEquipped={(newSkin) => {
-            setEquippedSkinId(newSkin);
-            if (onSkinChange) onSkinChange(newSkin);
-          }}
-        />
-      )}
     </div>
   );
 };

@@ -8,8 +8,8 @@ function withErrorHandling(handler) {
             return await handler(request);
         }
         catch (err) {
-            if (err?.name === 'ServerFunctionError' || err?.code) {
-                throw new https_1.HttpsError('failed-precondition', err.message, err.toResponseError ? err.toResponseError() : { code: err.code, message: err.message });
+            if (err.name === 'ServerFunctionError') {
+                throw new https_1.HttpsError('failed-precondition', err.message, err.toResponseError ? err.toResponseError() : err);
             }
             if (err instanceof https_1.HttpsError) {
                 throw err;

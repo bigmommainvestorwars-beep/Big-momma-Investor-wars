@@ -22,7 +22,7 @@ export interface FirestoreMatchDoc {
   hostUserId: string;
   boardId: string;
   rulesetVersion: string;
-  status: 'waiting_for_players' | 'in_progress' | 'active' | 'paused' | 'completed' | 'abandoned';
+  status: 'waiting_for_players' | 'in_progress' | 'paused' | 'completed' | 'abandoned';
   currentPhase: string;
   currentPlayerId: string | null;
   turnNumber: number;
@@ -34,8 +34,6 @@ export interface FirestoreMatchDoc {
   accessCode?: string;
   createdAt: number;
   updatedAt: number;
-  lastRoll?: [number, number];
-  lastRollPlayerId?: string;
 }
 
 export interface FirestorePlayerDoc {
@@ -89,8 +87,6 @@ export class MatchSyncService {
   private pendingChoiceListeners = new Map<string, Set<(choice: PendingMarketChoiceDoc | null) => void>>();
   private marketEventListeners = new Map<string, Set<(event: MarketEvent | null) => void>>();
   private openMatchesListeners = new Set<(matches: FirestoreMatchDoc[]) => void>();
-  private playerSyncCallbacks = new Set<(matchId: string, players: FirestorePlayerDoc[]) => void>();
-  private matchSyncCallbacks = new Set<(matchId: string, matchDoc: FirestoreMatchDoc) => void>();
   private localContainerProvider?: (matchId: string) => {
     match: FirestoreMatchDoc;
     players: FirestorePlayerDoc[];
@@ -112,14 +108,6 @@ export class MatchSyncService {
     } | undefined
   ): void {
     this.localContainerProvider = provider;
-  }
-
-  public registerPlayerSyncCallback(cb: (matchId: string, players: FirestorePlayerDoc[]) => void): void {
-    this.playerSyncCallbacks.add(cb);
-  }
-
-  public registerMatchSyncCallback(cb: (matchId: string, matchDoc: FirestoreMatchDoc) => void): void {
-    this.matchSyncCallbacks.add(cb);
   }
 
   public registerLocalOpenMatchesProvider(provider: () => FirestoreMatchDoc[]): void {
@@ -235,11 +223,15 @@ export class MatchSyncService {
     }
     this.matchListeners.get(matchId)!.add(onData);
 
-    // Initial local dispatch if available for instantaneous local preview
+    // Initial local dispatch if available
     if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData({ ...local.match });
+        // Local authoritative match: state is purely driven by local engine events
+        return () => {
+          this.matchListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -252,27 +244,11 @@ export class MatchSyncService {
         matchRef,
         (snap) => {
           if (snap.exists()) {
-            const matchDoc = { id: snap.id, ...snap.data() } as FirestoreMatchDoc;
-            onData(matchDoc);
-            // Synchronize in-memory engine state
-            if (this.localContainerProvider) {
-              const local = this.localContainerProvider(matchId);
-              if (local) {
-                Object.assign(local.match, matchDoc);
-              }
-            }
-            for (const cb of this.matchSyncCallbacks) {
-              try {
-                cb(matchId, matchDoc);
-              } catch (e) {
-                console.warn('[MatchSyncService] Match callback error:', e);
-              }
-            }
+            onData({ id: snap.id, ...snap.data() } as FirestoreMatchDoc);
           }
         },
         (err) => {
           if (onError) onError(err);
-          else console.warn('Match sync warning:', err.message);
         }
       );
     }
@@ -296,11 +272,14 @@ export class MatchSyncService {
     }
     this.playersListeners.get(matchId)!.add(onData);
 
-    // Initial local dispatch if available for instantaneous local preview
+    // Initial local dispatch if available
     if (this.localContainerProvider) {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.players]);
+        return () => {
+          this.playersListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -314,34 +293,10 @@ export class MatchSyncService {
         (snap) => {
           const players = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestorePlayerDoc));
           players.sort((a, b) => a.turnOrder - b.turnOrder);
-          console.log(`[MatchSyncService] onSnapshot synchronized ${players.length} players for match ${matchId}:`, players.map((p) => `${p.displayName} (${p.id})`));
           onData(players);
-
-          // Synchronize in-memory container so that host and guest engines stay identical
-          for (const cb of this.playerSyncCallbacks) {
-            try {
-              cb(matchId, players);
-            } catch (e) {
-              console.warn('[MatchSyncService] Player callback error:', e);
-            }
-          }
-
-          if (this.localContainerProvider) {
-            const local = this.localContainerProvider(matchId);
-            if (local) {
-              local.players.length = 0;
-              local.players.push(...players);
-              for (const p of players) {
-                if (!local.match.participantUserIds.includes(p.id)) {
-                  local.match.participantUserIds.push(p.id);
-                }
-              }
-            }
-          }
         },
         (err) => {
           if (onError) onError(err);
-          else console.warn('Players sync warning:', err.message);
         }
       );
     }
@@ -370,12 +325,14 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData([...local.logs]);
+        return () => {
+          this.logsListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
     const db = getFirebaseFirestore();
     let fsUnsub: Unsubscribe = () => {};
-    let fallbackUnsub: Unsubscribe = () => {};
 
     if (db) {
       const logsRef = collection(db, 'matches', matchId, 'logs');
@@ -387,27 +344,14 @@ export class MatchSyncService {
           const logs = snap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
           onData(logs);
         },
-        (err) => {
-          const isIndexMissing = (err as any)?.code === 'failed-precondition' || err?.message?.includes('index');
-          if (isIndexMissing) {
-            // Fallback if index is missing
-            const fallbackRef = collection(db, 'matches', matchId, 'logs');
-            fallbackUnsub = onSnapshot(
-              fallbackRef,
-              (fallbackSnap) => {
-                const fallbackLogs = fallbackSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
-                fallbackLogs.sort((a, b) => b.timestamp - a.timestamp);
-                onData(fallbackLogs.slice(0, 30));
-              },
-              (fallbackErr) => {
-                if (onError) onError(fallbackErr);
-                else console.warn('Fallback logs sync warning:', fallbackErr.message);
-              }
-            );
-          } else {
-            if (onError) onError(err);
-            else console.warn('Logs sync warning:', err.message);
-          }
+        () => {
+          // Fallback if index is missing
+          const fallbackRef = collection(db, 'matches', matchId, 'logs');
+          onSnapshot(fallbackRef, (fallbackSnap) => {
+            const fallbackLogs = fallbackSnap.docs.map((d) => ({ id: d.id, ...d.data() } as FirestoreLogDoc));
+            fallbackLogs.sort((a, b) => b.timestamp - a.timestamp);
+            onData(fallbackLogs.slice(0, 30));
+          });
         }
       );
     }
@@ -415,7 +359,6 @@ export class MatchSyncService {
     return () => {
       this.logsListeners.get(matchId)?.delete(onData);
       fsUnsub();
-      fallbackUnsub();
     };
   }
 
@@ -437,6 +380,9 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeAuction ? { ...local.activeAuction } : null);
+        return () => {
+          this.auctionListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -459,7 +405,6 @@ export class MatchSyncService {
         },
         (err) => {
           if (onError) onError(err);
-          else console.warn('Auctions sync warning:', err.message);
         }
       );
     }
@@ -500,28 +445,10 @@ export class MatchSyncService {
       fsUnsub = onSnapshot(
         lobbyQuery,
         (snap) => {
-          const now = Date.now();
-          const cutoff = now - 5 * 60 * 1000; // 5-minute inactivity threshold
-          const remoteMatches: FirestoreMatchDoc[] = [];
-
-          for (const d of snap.docs) {
-            const data = { id: d.id, ...d.data() } as FirestoreMatchDoc;
-            const lastActive = data.updatedAt || data.createdAt || 0;
-            const participantCount = Array.isArray(data.participantUserIds) ? data.participantUserIds.length : 0;
-            const isStale = lastActive < cutoff || participantCount === 0;
-
-            if (!isStale && !data.isPrivate && data.status === 'waiting_for_players') {
-              remoteMatches.push(data);
-            }
-          }
-
-          const rawLocal = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
-          const localMatches = rawLocal.filter((m) => {
-            const lastActive = m.updatedAt || m.createdAt || 0;
-            const participantCount = Array.isArray(m.participantUserIds) ? m.participantUserIds.length : 0;
-            return !m.isPrivate && m.status === 'waiting_for_players' && lastActive >= cutoff && participantCount > 0;
-          });
-
+          const remoteMatches = snap.docs
+            .map((d) => ({ id: d.id, ...d.data() } as FirestoreMatchDoc))
+            .filter((m) => !m.isPrivate);
+          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
           // Combine unique matches
           const matchMap = new Map<string, FirestoreMatchDoc>();
           for (const m of localMatches) matchMap.set(m.id, m);
@@ -530,16 +457,9 @@ export class MatchSyncService {
         },
         (err) => {
           // Gracefully default to local open matches if unauthenticated or security rules active
-          const rawLocal = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
-          const cutoff = Date.now() - 5 * 60 * 1000;
-          const localMatches = rawLocal.filter((m) => {
-            const lastActive = m.updatedAt || m.createdAt || 0;
-            const participantCount = Array.isArray(m.participantUserIds) ? m.participantUserIds.length : 0;
-            return !m.isPrivate && m.status === 'waiting_for_players' && lastActive >= cutoff && participantCount > 0;
-          });
+          const localMatches = this.localOpenMatchesProvider ? this.localOpenMatchesProvider() : [];
           onData(localMatches);
           if (onError) onError(err);
-          else console.warn('Lobby sync warning:', err.message);
         }
       );
     } else {
@@ -571,6 +491,9 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.pendingChoice ? { ...local.pendingChoice } : null);
+        return () => {
+          this.pendingChoiceListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -590,7 +513,6 @@ export class MatchSyncService {
         },
         (err) => {
           if (onError) onError(err);
-          else console.warn('Pending choice sync warning:', err.message);
         }
       );
     }
@@ -619,6 +541,9 @@ export class MatchSyncService {
       const local = this.localContainerProvider(matchId);
       if (local) {
         onData(local.activeMarketEvent ? { ...local.activeMarketEvent } : null);
+        return () => {
+          this.marketEventListeners.get(matchId)?.delete(onData);
+        };
       }
     }
 
@@ -638,7 +563,6 @@ export class MatchSyncService {
         },
         (err) => {
           if (onError) onError(err);
-          else console.warn('Active event sync warning:', err.message);
         }
       );
     }

@@ -6,18 +6,13 @@ import { useGame } from '../../context/GameContext';
 
 export const MatchSetupScreen: React.FC = () => {
   const { goBack, navigate } = useNavigation();
-  const { createCustomBotMatch, isActionPending, matchError, clearMatchError } = useGame();
+  const { createCustomBotMatch, isActionPending, matchError } = useGame();
   
   const [botCount, setBotCount] = useState<number>(3);
   const [localError, setLocalError] = useState<string | null>(null);
 
-  React.useEffect(() => {
-    clearMatchError();
-  }, [clearMatchError]);
-
   const handleStart = async () => {
     setLocalError(null);
-    clearMatchError();
     try {
       await createCustomBotMatch(botCount);
       navigate('GAMEPLAY');
@@ -25,12 +20,6 @@ export const MatchSetupScreen: React.FC = () => {
       console.error('Failed to create match', e);
       setLocalError(e?.message || 'Failed to initialize match simulation. Please try again.');
     }
-  };
-
-  const handleSelectBotCount = (count: number) => {
-    setBotCount(count);
-    setLocalError(null);
-    clearMatchError();
   };
 
   const activeError = localError || matchError;
@@ -75,7 +64,7 @@ export const MatchSetupScreen: React.FC = () => {
                 {[1, 2, 3].map(num => (
                   <button
                     key={num}
-                    onClick={() => handleSelectBotCount(num)}
+                    onClick={() => setBotCount(num)}
                     className={`py-4 rounded-xl text-center border transition-all cursor-pointer ${
                       botCount === num 
                       ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.2)]' 

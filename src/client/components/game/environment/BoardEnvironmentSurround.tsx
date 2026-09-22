@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Building2,
   Trees,
@@ -8,45 +8,19 @@ import {
 } from 'lucide-react';
 import { SCENERY_PRESETS, SceneryPreset } from './sceneryData';
 import { HDSceneryModal } from './HDSceneryModal';
-import { CosmeticsManager, EquippedCosmeticsState } from '../../../../services/cosmetics/cosmeticsManager';
 
 interface BoardEnvironmentSurroundProps {
   children: React.ReactNode;
 }
 
-// Map board skin ID to corresponding scenery preset index (0: Default Central Park, 1: Metropolitan Financial Plaza)
-function getPresetIndexForBoardSkin(skinId: string): number {
-  switch (skinId) {
-    case 'board-metropolitan':
-    case 'board-classic-emerald':
-    case 'board-sovereign-gold':
-      return 1; // Metropolitan Financial Plaza & Gardens
-    case 'board-wallstreet-night':
-    default:
-      return 0; // Default Background: Central Park High-Rises & Green Canopy
-  }
-}
-
 export const BoardEnvironmentSurround: React.FC<BoardEnvironmentSurroundProps> = ({
   children,
 }) => {
-  const [activePresetIndex, setActivePresetIndex] = useState<number>(() => {
-    const skin = CosmeticsManager.getEquippedState().boardSkin;
-    return getPresetIndexForBoardSkin(skin);
-  });
+  const [activePresetIndex, setActivePresetIndex] = useState<number>(0);
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [intensity, setIntensity] = useState<'vivid' | 'balanced' | 'subtle'>('vivid');
 
-  // Keep scenery synchronized whenever user equips a different board skin in the Store or Settings
-  useEffect(() => {
-    const unsub = CosmeticsManager.subscribe((equipped: EquippedCosmeticsState) => {
-      const targetIdx = getPresetIndexForBoardSkin(equipped.boardSkin);
-      setActivePresetIndex(targetIdx);
-    });
-    return unsub;
-  }, []);
-
-  const currentPreset: SceneryPreset = SCENERY_PRESETS[activePresetIndex] || SCENERY_PRESETS[0];
+  const currentPreset: SceneryPreset = SCENERY_PRESETS[activePresetIndex];
 
   const handleNextPreset = () => {
     setActivePresetIndex((prev) => (prev + 1) % SCENERY_PRESETS.length);

@@ -1,12 +1,6 @@
 import * as THREE from 'three';
 
-export type DiceMaterialType =
-  | 'obsidian-gold'
-  | 'neon-cyberpunk'
-  | 'crystal-ruby'
-  | 'ivory'
-  | 'emerald-vip'
-  | 'glossy-plastic';
+export type DiceMaterialType = 'ivory' | 'glossy-plastic';
 
 export interface DiceTexturePackage {
   colorMaps: THREE.CanvasTexture[];
@@ -94,145 +88,18 @@ export function createDiceFaceTextures(
     const ctx = colorCanvas.getContext('2d');
 
     if (ctx) {
-      if (materialType === 'obsidian-gold') {
-        // --- OBSIDIAN & GOLD BASE ---
-        // Ultra-dense volcanic glass: Deep mirror black with subtle mineral flecks
-        const bgGrad = ctx.createRadialGradient(size / 2, size / 2, 40, size / 2, size / 2, size * 0.75);
-        bgGrad.addColorStop(0, '#1c1917'); // Stone 900 highlight center
-        bgGrad.addColorStop(0.5, '#0c0a09'); // Stone 950 deep body
-        bgGrad.addColorStop(0.85, '#050505'); // Pitch obsidian
-        bgGrad.addColorStop(1, '#000000'); // Pure void rim
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(0, 0, size, size);
-
-        // Volcanic mineral obsidian flecks (subtle gold / bronze crystal dust)
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.04)';
-        for (let i = 0; i < 40; i++) {
-          const fx = (Math.sin(i * 99 + face) * 0.5 + 0.5) * size;
-          const fy = (Math.cos(i * 33 + face) * 0.5 + 0.5) * size;
-          ctx.fillRect(fx, fy, 3, 3);
-        }
-
-        // Luxury 24K Gold Inlay Framing Border
-        const margin = Math.round(76 * scale);
-        const cornerRad = Math.round(64 * scale);
-        ctx.save();
-        ctx.beginPath();
-        ctx.roundRect(margin, margin, size - margin * 2, size - margin * 2, cornerRad);
-        ctx.lineWidth = Math.max(2, 3 * scale);
-        const goldBorderGrad = ctx.createLinearGradient(margin, margin, size - margin, size - margin);
-        goldBorderGrad.addColorStop(0, '#fef08a'); // 24K Gold light glint
-        goldBorderGrad.addColorStop(0.3, '#f59e0b'); // Amber gold body
-        goldBorderGrad.addColorStop(0.7, '#d97706'); // Deep warm gold
-        goldBorderGrad.addColorStop(1, '#78350f'); // Burnished gold shadow
-        ctx.strokeStyle = goldBorderGrad;
-        ctx.stroke();
-
-        // 1px Inner Gold Contact Highlight
-        ctx.beginPath();
-        ctx.roundRect(margin + 2, margin + 2, size - (margin + 2) * 2, size - (margin + 2) * 2, Math.max(1, cornerRad - 2));
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = 'rgba(254, 240, 138, 0.45)';
-        ctx.stroke();
-        ctx.restore();
-      } else if (materialType === 'neon-cyberpunk') {
-        // --- NEON CYBERPUNK BASE ---
-        // Carbon nano-mesh matrix with cyber circuitry traces & UV phosphors
-        const bgGrad = ctx.createRadialGradient(size / 2, size / 2, 40, size / 2, size / 2, size * 0.75);
-        bgGrad.addColorStop(0, '#0f172a'); // Slate 900 core
-        bgGrad.addColorStop(0.55, '#070b14'); // Cyber midnight
-        bgGrad.addColorStop(0.85, '#03050a'); // Carbon edge
-        bgGrad.addColorStop(1, '#000000');
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(0, 0, size, size);
-
-        // Cyber Grid Nano-Traces
-        ctx.save();
-        ctx.strokeStyle = 'rgba(6, 182, 212, 0.08)';
-        ctx.lineWidth = 1;
-        const gridStep = Math.round(64 * scale);
-        for (let g = gridStep; g < size; g += gridStep) {
-          ctx.beginPath();
-          ctx.moveTo(g, 0);
-          ctx.lineTo(g, size);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(0, g);
-          ctx.lineTo(size, g);
-          ctx.stroke();
-        }
-
-        // Cyberpunk Angular Framing Border (Cyan to Neon Pink)
-        const margin = Math.round(76 * scale);
-        const cornerRad = Math.round(48 * scale);
-        ctx.beginPath();
-        ctx.roundRect(margin, margin, size - margin * 2, size - margin * 2, cornerRad);
-        ctx.lineWidth = Math.max(2, 3 * scale);
-        const cyberBorderGrad = ctx.createLinearGradient(margin, margin, size - margin, size - margin);
-        cyberBorderGrad.addColorStop(0, '#00f0ff'); // Electric Cyan
-        cyberBorderGrad.addColorStop(0.5, '#06b6d4');
-        cyberBorderGrad.addColorStop(1, '#ff007f'); // Hot Neon Pink
-        ctx.strokeStyle = cyberBorderGrad;
-        ctx.stroke();
-
-        // Corner Cyber Circuitry Nodes
-        const nodes = [
-          [margin, margin],
-          [size - margin, margin],
-          [margin, size - margin],
-          [size - margin, size - margin],
-        ];
-        ctx.fillStyle = '#00f0ff';
-        nodes.forEach(([nx, ny]) => {
-          ctx.beginPath();
-          ctx.arc(nx, ny, 3.5 * scale, 0, Math.PI * 2);
-          ctx.fill();
-        });
-        ctx.restore();
-      } else if (materialType === 'emerald-vip') {
-        // --- EMERALD VIP BASE ---
-        // Imperial Jadeite Crystal with golden starbursts & gold trim
-        const bgGrad = ctx.createRadialGradient(size / 2, size / 2, 40, size / 2, size / 2, size * 0.72);
-        bgGrad.addColorStop(0, '#10b981'); // Vibrant Emerald center
-        bgGrad.addColorStop(0.45, '#059669'); // Jade body
-        bgGrad.addColorStop(0.8, '#047857'); // Deep jade
-        bgGrad.addColorStop(1, '#022c22'); // Dark boundary
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(0, 0, size, size);
-
-        // Jade crystal vein flecks
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
-        for (let i = 0; i < 30; i++) {
-          const fx = (Math.sin(i * 67 + face) * 0.5 + 0.5) * size;
-          const fy = (Math.cos(i * 41 + face) * 0.5 + 0.5) * size;
-          ctx.fillRect(fx, fy, 4 * scale, 2 * scale);
-        }
-
-        // 24K Gold Inlay Framing Border
-        const margin = Math.round(76 * scale);
-        const cornerRad = Math.round(64 * scale);
-        ctx.save();
-        ctx.beginPath();
-        ctx.roundRect(margin, margin, size - margin * 2, size - margin * 2, cornerRad);
-        ctx.lineWidth = Math.max(2, 3 * scale);
-        const goldBorderGrad = ctx.createLinearGradient(margin, margin, size - margin, size - margin);
-        goldBorderGrad.addColorStop(0, '#fef08a');
-        goldBorderGrad.addColorStop(0.3, '#f59e0b');
-        goldBorderGrad.addColorStop(0.7, '#d97706');
-        goldBorderGrad.addColorStop(1, '#78350f');
-        ctx.strokeStyle = goldBorderGrad;
-        ctx.stroke();
-        ctx.restore();
-      } else if (materialType === 'ivory') {
+      if (materialType === 'ivory') {
         // --- POLISHED IVORY BASE ---
+        // Warm ivory / porcelain radial gradient
         const bgGrad = ctx.createRadialGradient(size / 2, size / 2, 60, size / 2, size / 2, size * 0.72);
-        bgGrad.addColorStop(0, '#fffefc');
-        bgGrad.addColorStop(0.55, '#fcf7ed');
-        bgGrad.addColorStop(0.85, '#f6eee0');
-        bgGrad.addColorStop(1, '#ebe0cc');
+        bgGrad.addColorStop(0, '#fffefc'); // Warm ivory highlight center
+        bgGrad.addColorStop(0.55, '#fcf7ed'); // Silky creamy ivory body
+        bgGrad.addColorStop(0.85, '#f6eee0'); // Subtle warm ivory tone
+        bgGrad.addColorStop(1, '#ebe0cc'); // Natural ambient falloff towards rounded bevel
         ctx.fillStyle = bgGrad;
         ctx.fillRect(0, 0, size, size);
 
+        // Organic micro-porcelain grain (prevents CGI plastic flatness)
         const grainStep = 4;
         ctx.fillStyle = 'rgba(180, 150, 110, 0.025)';
         for (let x = 0; x < size; x += grainStep * 2) {
@@ -241,69 +108,61 @@ export function createDiceFaceTextures(
           }
         }
 
-        const margin = Math.round(76 * scale);
-        const cornerRad = Math.round(64 * scale);
+        // Luxury 24K Gold Inlay Framing Border (Vegas / Monte Carlo High-Roller edition)
+        const margin = 76;
+        const cornerRad = 64;
         ctx.save();
         ctx.beginPath();
         ctx.roundRect(margin, margin, size - margin * 2, size - margin * 2, cornerRad);
-        ctx.lineWidth = Math.max(2, 2.5 * scale);
+        ctx.lineWidth = 2.5;
         const goldBorderGrad = ctx.createLinearGradient(margin, margin, size - margin, size - margin);
-        goldBorderGrad.addColorStop(0, '#fde68a');
-        goldBorderGrad.addColorStop(0.3, '#f59e0b');
-        goldBorderGrad.addColorStop(0.7, '#d97706');
-        goldBorderGrad.addColorStop(1, '#92400e');
+        goldBorderGrad.addColorStop(0, '#fde68a'); // 24K Gold light glint
+        goldBorderGrad.addColorStop(0.3, '#f59e0b'); // Amber gold body
+        goldBorderGrad.addColorStop(0.7, '#d97706'); // Deep warm gold
+        goldBorderGrad.addColorStop(1, '#92400e'); // Burnished gold shadow
         ctx.strokeStyle = goldBorderGrad;
         ctx.stroke();
 
+        // 1px inner contact shadow along the gold inlay groove
         ctx.beginPath();
-        ctx.roundRect(margin + 2, margin + 2, size - (margin + 2) * 2, size - (margin + 2) * 2, Math.max(1, cornerRad - 2));
+        ctx.roundRect(margin + 2, margin + 2, size - (margin + 2) * 2, size - (margin + 2) * 2, cornerRad - 2);
         ctx.lineWidth = 1;
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
         ctx.stroke();
         ctx.restore();
       } else {
-        // --- CRYSTAL RUBY / GLOSSY CASINO BASE ---
+        // --- GLOSSY CASINO PLASTIC BASE ---
+        // Deep translucent ruby-red acrylic / candy resin with internal refraction
         const bgGrad = ctx.createRadialGradient(size / 2, size / 2, 40, size / 2, size / 2, size * 0.72);
-        bgGrad.addColorStop(0, '#e11d48');
-        bgGrad.addColorStop(0.5, '#be123c');
-        bgGrad.addColorStop(0.85, '#9f1239');
-        bgGrad.addColorStop(1, '#4c0519');
+        bgGrad.addColorStop(0, '#e11d48'); // Vibrant candy crimson center
+        bgGrad.addColorStop(0.5, '#be123c'); // Rich casino ruby body
+        bgGrad.addColorStop(0.85, '#9f1239'); // Deep wine edge
+        bgGrad.addColorStop(1, '#4c0519'); // Dark boundary
         ctx.fillStyle = bgGrad;
         ctx.fillRect(0, 0, size, size);
 
-        const margin = Math.round(76 * scale);
-        const cornerRad = Math.round(64 * scale);
+        // Translucent internal light flecks
+        const margin = 76;
+        const cornerRad = 64;
         ctx.save();
         ctx.beginPath();
         ctx.roundRect(margin, margin, size - margin * 2, size - margin * 2, cornerRad);
-        ctx.lineWidth = Math.max(1.5, 2 * scale);
+        ctx.lineWidth = 2;
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
         ctx.stroke();
         ctx.restore();
       }
 
       // --- HIGH-RESOLUTION PIPS WITH TRUE 3D DEPTH ---
-      const pipRadius = isAce ? Math.round(96 * scale) : Math.round(64 * scale);
+      const pipRadius = isAce ? 96 : 64;
 
       pips.forEach(([px, py]) => {
         ctx.save();
 
         // 1. Carved Indentation Cavity: Ambient Occlusion & Depth Shadow
-        const cavityRadius = pipRadius + Math.round(12 * scale);
+        const cavityRadius = pipRadius + 12;
         const cavityGrad = ctx.createRadialGradient(px - 10, py - 10, 10, px, py, cavityRadius);
-        if (materialType === 'obsidian-gold') {
-          cavityGrad.addColorStop(0, 'rgba(0, 0, 0, 0.85)');
-          cavityGrad.addColorStop(0.6, 'rgba(30, 20, 10, 0.5)');
-          cavityGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        } else if (materialType === 'neon-cyberpunk') {
-          cavityGrad.addColorStop(0, 'rgba(0, 240, 255, 0.35)');
-          cavityGrad.addColorStop(0.7, 'rgba(255, 0, 127, 0.15)');
-          cavityGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        } else if (materialType === 'emerald-vip') {
-          cavityGrad.addColorStop(0, 'rgba(2, 44, 34, 0.7)');
-          cavityGrad.addColorStop(0.7, 'rgba(4, 120, 87, 0.3)');
-          cavityGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-        } else if (materialType === 'ivory') {
+        if (materialType === 'ivory') {
           cavityGrad.addColorStop(0, 'rgba(30, 20, 10, 0.45)');
           cavityGrad.addColorStop(0.7, 'rgba(60, 45, 25, 0.25)');
           cavityGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
@@ -317,40 +176,24 @@ export function createDiceFaceTextures(
         ctx.arc(px, py, cavityRadius, 0, Math.PI * 2);
         ctx.fill();
 
-        // 2. Outer Beveled Rim Highlight
+        // 2. Outer Beveled Rim Highlight (Light catching the carved hole's bottom-right edge)
         ctx.beginPath();
         ctx.arc(px, py, cavityRadius - 1, 0.08 * Math.PI, 0.92 * Math.PI);
-        ctx.lineWidth = Math.max(1.5, 3 * scale);
-        if (materialType === 'obsidian-gold') {
-          ctx.strokeStyle = 'rgba(254, 240, 138, 0.85)';
-        } else if (materialType === 'neon-cyberpunk') {
-          ctx.strokeStyle = 'rgba(0, 240, 255, 0.95)';
-        } else if (materialType === 'emerald-vip') {
-          ctx.strokeStyle = 'rgba(254, 240, 138, 0.85)';
-        } else if (materialType === 'ivory') {
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
-        } else {
-          ctx.strokeStyle = 'rgba(255, 220, 230, 0.65)';
-        }
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = materialType === 'ivory' ? 'rgba(255, 255, 255, 0.85)' : 'rgba(255, 220, 230, 0.65)';
         ctx.stroke();
 
         // 3. Lacquer / Enamel Infill
         if (isAce) {
-          // --- ACE OF DICE: IMPERIAL MEDALLION ---
-          const goldRingOuter = pipRadius + Math.round(8 * scale);
+          // --- ACE OF DICE: IMPERIAL CASINO MEDALLION ---
+          // 24K Gold Leaf Filigree Ring around Ace
+          const goldRingOuter = pipRadius + 8;
           const goldRingInner = pipRadius;
           const goldRingGrad = ctx.createLinearGradient(px - goldRingOuter, py - goldRingOuter, px + goldRingOuter, py + goldRingOuter);
-          
-          if (materialType === 'neon-cyberpunk') {
-            goldRingGrad.addColorStop(0, '#00f0ff');
-            goldRingGrad.addColorStop(0.5, '#38bdf8');
-            goldRingGrad.addColorStop(1, '#ff007f');
-          } else {
-            goldRingGrad.addColorStop(0, '#fef08a');
-            goldRingGrad.addColorStop(0.3, '#f59e0b');
-            goldRingGrad.addColorStop(0.7, '#d97706');
-            goldRingGrad.addColorStop(1, '#78350f');
-          }
+          goldRingGrad.addColorStop(0, '#fef08a');
+          goldRingGrad.addColorStop(0.3, '#f59e0b');
+          goldRingGrad.addColorStop(0.7, '#d97706');
+          goldRingGrad.addColorStop(1, '#78350f');
 
           ctx.beginPath();
           ctx.arc(px, py, goldRingOuter, 0, Math.PI * 2);
@@ -358,43 +201,26 @@ export function createDiceFaceTextures(
           ctx.fill();
 
           // Recessed Jewel Bowl
-          const jewelGrad = ctx.createRadialGradient(px - 18 * scale, py - 18 * scale, 12 * scale, px, py, pipRadius);
-          if (materialType === 'obsidian-gold') {
-            // Radiant Liquid 24K Gold Core
-            jewelGrad.addColorStop(0, '#fffbeb');
-            jewelGrad.addColorStop(0.3, '#fde047');
-            jewelGrad.addColorStop(0.7, '#d97706');
-            jewelGrad.addColorStop(1, '#78350f');
-          } else if (materialType === 'neon-cyberpunk') {
-            // Quantum Cyber HUD Core
-            jewelGrad.addColorStop(0, '#ffffff');
-            jewelGrad.addColorStop(0.4, '#00f0ff');
-            jewelGrad.addColorStop(0.8, '#ff007f');
-            jewelGrad.addColorStop(1, '#020617');
-          } else if (materialType === 'emerald-vip') {
-            // Crowned Emerald Jewel Core
+          const jewelGrad = ctx.createRadialGradient(px - 18, py - 18, 12, px, py, pipRadius);
+          if (materialType === 'ivory') {
+            // Radiant Imperial Ruby Jewel Core
+            jewelGrad.addColorStop(0, '#f43f5e'); // Rose 500 highlight
+            jewelGrad.addColorStop(0.25, '#e11d48'); // Rose 600
+            jewelGrad.addColorStop(0.65, '#9f1239'); // Rose 800
+            jewelGrad.addColorStop(1, '#4c0519'); // Deep crimson shadow
+          } else {
+            // Radiant Emerald Gold Medallion Core on Red Plastic
             jewelGrad.addColorStop(0, '#6ee7b7');
             jewelGrad.addColorStop(0.35, '#10b981');
             jewelGrad.addColorStop(0.75, '#047857');
             jewelGrad.addColorStop(1, '#022c22');
-          } else if (materialType === 'ivory') {
-            // Radiant Imperial Ruby Jewel Core
-            jewelGrad.addColorStop(0, '#f43f5e');
-            jewelGrad.addColorStop(0.25, '#e11d48');
-            jewelGrad.addColorStop(0.65, '#9f1239');
-            jewelGrad.addColorStop(1, '#4c0519');
-          } else {
-            jewelGrad.addColorStop(0, '#ffffff');
-            jewelGrad.addColorStop(0.35, '#f8fafc');
-            jewelGrad.addColorStop(0.75, '#cbd5e1');
-            jewelGrad.addColorStop(1, '#94a3b8');
           }
           ctx.fillStyle = jewelGrad;
           ctx.beginPath();
           ctx.arc(px, py, goldRingInner, 0, Math.PI * 2);
           ctx.fill();
 
-          // Signature Starburst Emblem inside the Ace
+          // Signature 24K Gold Starburst Emblem inside the Ace
           ctx.save();
           ctx.translate(px, py);
           const starRadius = pipRadius * 0.44;
@@ -410,53 +236,23 @@ export function createDiceFaceTextures(
           }
           ctx.closePath();
           const starGrad = ctx.createLinearGradient(-starRadius, -starRadius, starRadius, starRadius);
-          if (materialType === 'neon-cyberpunk') {
-            starGrad.addColorStop(0, '#ffffff');
-            starGrad.addColorStop(0.5, '#67e8f9');
-            starGrad.addColorStop(1, '#00f0ff');
-          } else if (materialType === 'obsidian-gold') {
-            starGrad.addColorStop(0, '#ffffff');
-            starGrad.addColorStop(0.5, '#fef08a');
-            starGrad.addColorStop(1, '#b45309');
-          } else {
-            starGrad.addColorStop(0, '#fffbeb');
-            starGrad.addColorStop(0.5, '#fde68a');
-            starGrad.addColorStop(1, '#b45309');
-          }
+          starGrad.addColorStop(0, '#fffbeb');
+          starGrad.addColorStop(0.5, '#fde68a');
+          starGrad.addColorStop(1, '#b45309');
           ctx.fillStyle = starGrad;
           ctx.fill();
           ctx.restore();
         } else {
-          // --- FACES 2-6: DEEP CONCAVE PIPS ---
-          const bowlGrad = ctx.createRadialGradient(px - 12 * scale, py - 12 * scale, 6 * scale, px, py, pipRadius);
-          if (materialType === 'obsidian-gold') {
-            // 24K Liquid Gold Enamel
-            bowlGrad.addColorStop(0, '#fffbeb');
-            bowlGrad.addColorStop(0.25, '#fde047');
-            bowlGrad.addColorStop(0.65, '#f59e0b');
-            bowlGrad.addColorStop(0.9, '#b45309');
-            bowlGrad.addColorStop(1, '#78350f');
-          } else if (materialType === 'neon-cyberpunk') {
-            // Electric UV Phosphor Cyan / Magenta Core
-            bowlGrad.addColorStop(0, '#ffffff');
-            bowlGrad.addColorStop(0.3, '#67e8f9');
-            bowlGrad.addColorStop(0.7, '#00f0ff');
-            bowlGrad.addColorStop(0.92, '#ff007f');
-            bowlGrad.addColorStop(1, '#090d16');
-          } else if (materialType === 'emerald-vip') {
-            // Pure Gold Starlight Pips on Emerald
-            bowlGrad.addColorStop(0, '#fffbeb');
-            bowlGrad.addColorStop(0.35, '#fde047');
-            bowlGrad.addColorStop(0.75, '#f59e0b');
-            bowlGrad.addColorStop(1, '#92400e');
-          } else if (materialType === 'ivory') {
-            // Deep Polished Onyx
-            bowlGrad.addColorStop(0, '#1e293b');
-            bowlGrad.addColorStop(0.35, '#0f172a');
-            bowlGrad.addColorStop(0.85, '#020617');
+          // --- FACES 2-6: DEEP CONCAVE LACQUER PIPS ---
+          const bowlGrad = ctx.createRadialGradient(px - 12, py - 12, 6, px, py, pipRadius);
+          if (materialType === 'ivory') {
+            // Deep Polished Obsidian / Onyx Lacquer with warm rich depth
+            bowlGrad.addColorStop(0, '#1e293b'); // Slate obsidian glint
+            bowlGrad.addColorStop(0.35, '#0f172a'); // Rich deep onyx
+            bowlGrad.addColorStop(0.85, '#020617'); // Pitch black cavity
             bowlGrad.addColorStop(1, '#000000');
           } else {
-            // Pure Polished Diamond White Enamel
+            // Pure Polished Pearl White Enamel on Candy Red Acrylic
             bowlGrad.addColorStop(0, '#ffffff');
             bowlGrad.addColorStop(0.35, '#f8fafc');
             bowlGrad.addColorStop(0.75, '#cbd5e1');
@@ -467,15 +263,15 @@ export function createDiceFaceTextures(
           ctx.arc(px, py, pipRadius, 0, Math.PI * 2);
           ctx.fill();
 
-          // Subtle meniscus rim ring
+          // Subtle meniscus rim ring (bonding line of liquid lacquer)
           ctx.beginPath();
           ctx.arc(px, py, pipRadius * 0.92, 0, Math.PI * 2);
-          ctx.lineWidth = Math.max(1, 1.5 * scale);
-          ctx.strokeStyle = materialType === 'neon-cyberpunk' ? 'rgba(0, 240, 255, 0.4)' : 'rgba(255, 255, 255, 0.2)';
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = materialType === 'ivory' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.15)';
           ctx.stroke();
         }
 
-        // 4. Specular Glint
+        // 4. Primary Specular Glint (Sharp light reflection on the wet lacquer surface)
         const glintX = px - pipRadius * 0.35;
         const glintY = py - pipRadius * 0.35;
         const glintRad = pipRadius * 0.22;
@@ -488,16 +284,12 @@ export function createDiceFaceTextures(
         ctx.arc(glintX, glintY, glintRad, 0, Math.PI * 2);
         ctx.fill();
 
-        // 5. Secondary Ambient Bounce Light
+        // 5. Secondary Soft Ambient Bounce Light (Light bouncing off the opposing cavity wall)
         const bounceX = px + pipRadius * 0.32;
         const bounceY = py + pipRadius * 0.32;
         const bounceRad = pipRadius * 0.28;
         const bounceGrad = ctx.createRadialGradient(bounceX, bounceY, 2, bounceX, bounceY, bounceRad);
-        if (materialType === 'obsidian-gold' || materialType === 'emerald-vip') {
-          bounceGrad.addColorStop(0, 'rgba(254, 240, 138, 0.4)');
-        } else if (materialType === 'neon-cyberpunk') {
-          bounceGrad.addColorStop(0, 'rgba(0, 240, 255, 0.5)');
-        } else if (materialType === 'ivory') {
+        if (materialType === 'ivory') {
           bounceGrad.addColorStop(0, 'rgba(254, 243, 199, 0.35)');
         } else {
           bounceGrad.addColorStop(0, 'rgba(255, 220, 220, 0.35)');
@@ -537,7 +329,7 @@ export function createDiceFaceTextures(
 
       // Inset hairline groove = 0.80 (#cccccc)
       const margin = Math.round(76 * scale);
-      const cornerRad = materialType === 'neon-cyberpunk' ? Math.round(48 * scale) : Math.round(64 * scale);
+      const cornerRad = Math.round(64 * scale);
       bCtx.beginPath();
       bCtx.roundRect(margin, margin, size - margin * 2, size - margin * 2, cornerRad);
       bCtx.lineWidth = Math.max(1.5, 3 * scale);
@@ -586,21 +378,14 @@ export function createDiceFaceTextures(
     const rCtx = roughCanvas.getContext('2d');
 
     if (rCtx) {
-      // Polished Ivory / Plastic / Obsidian / Cyberpunk Base Roughness:
-      // Dark value = very smooth/glossy (roughness ~0.12 = #1f1f1f, cyber matte ~0.24 = #3d3d3d)
-      rCtx.fillStyle =
-        materialType === 'neon-cyberpunk'
-          ? '#383838'
-          : materialType === 'ivory'
-          ? '#202020'
-          : materialType === 'obsidian-gold'
-          ? '#0c0c0c'
-          : '#141414';
+      // Polished Ivory / Plastic Base Roughness:
+      // Dark value = very smooth/glossy (roughness ~0.12 = #1f1f1f)
+      rCtx.fillStyle = materialType === 'ivory' ? '#202020' : '#141414';
       rCtx.fillRect(0, 0, size, size);
 
       // Gold inlay groove: extra mirror polish
       const margin = Math.round(76 * scale);
-      const cornerRad = materialType === 'neon-cyberpunk' ? Math.round(48 * scale) : Math.round(64 * scale);
+      const cornerRad = Math.round(64 * scale);
       rCtx.beginPath();
       rCtx.roundRect(margin, margin, size - margin * 2, size - margin * 2, cornerRad);
       rCtx.lineWidth = Math.max(1.5, 3 * scale);

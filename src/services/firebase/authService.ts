@@ -6,8 +6,6 @@
 import {
   GoogleAuthProvider,
   signInWithPopup,
-  signInWithRedirect,
-  getRedirectResult,
   signInAnonymously as fbSignInAnonymously,
   signInWithEmailAndPassword as fbSignInWithEmail,
   createUserWithEmailAndPassword as fbCreateUserWithEmail,
@@ -53,7 +51,6 @@ export interface IAuthService {
   signUpWithEmail(email: string, password: string, displayName?: string): Promise<User>;
   signInWithApprovedProvider(provider: ApprovedAuthProvider): Promise<User>;
   signOut(): Promise<void>;
-  updateCurrentUserProfile(displayName: string, photoURL?: string): Promise<void>;
   onAuthStateChanged(callback: (user: User | null) => void): Unsubscribe;
 }
 
@@ -150,25 +147,7 @@ class FirebaseAuthService implements IAuthService {
       const user = mapFirebaseUser(credential.user);
       logger.log('security_event', 'info', `User signed in with email: ${user.uid}`, { userId: user.uid });
       return user;
-    } catch (error: any) {
-      if (error?.code === 'auth/invalid-credential' || error?.code === 'auth/user-not-found') {
-        const customErr = new Error('No account found with these credentials. If you are new, click "Create Account" to register, or use 1-Tap Phone access.');
-        (customErr as any).code = error.code;
-        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_IN_FAILED', action: 'signInWithEmail' });
-        throw customErr;
-      }
-      if (error?.code === 'auth/invalid-email') {
-        const customErr = new Error('Please enter a valid email address (e.g. investor@domain.com).');
-        (customErr as any).code = error.code;
-        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_IN_FAILED', action: 'signInWithEmail' });
-        throw customErr;
-      }
-      if (error?.code === 'auth/wrong-password') {
-        const customErr = new Error('Incorrect password. Please verify and try again.');
-        (customErr as any).code = error.code;
-        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_IN_FAILED', action: 'signInWithEmail' });
-        throw customErr;
-      }
+    } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_EMAIL_SIGN_IN_FAILED', action: 'signInWithEmail' });
       throw error;
     }
@@ -187,77 +166,9 @@ class FirebaseAuthService implements IAuthService {
       }
       logger.log('security_event', 'info', `User registered with email: ${user.uid}`, { userId: user.uid });
       return user;
-    } catch (error: any) {
-      if (error?.code === 'auth/email-already-in-use') {
-        const customErr = new Error('An account already exists with this email. Switch to "Sign In" to log into your account.');
-        (customErr as any).code = error.code;
-        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_UP_FAILED', action: 'signUpWithEmail' });
-        throw customErr;
-      }
-      if (error?.code === 'auth/weak-password') {
-        const customErr = new Error('Password should be at least 6 characters long.');
-        (customErr as any).code = error.code;
-        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_UP_FAILED', action: 'signUpWithEmail' });
-        throw customErr;
-      }
-      if (error?.code === 'auth/invalid-email') {
-        const customErr = new Error('Please enter a valid email address (e.g. investor@domain.com).');
-        (customErr as any).code = error.code;
-        errorHandler.capture(customErr, { errorCode: 'AUTH_EMAIL_SIGN_UP_FAILED', action: 'signUpWithEmail' });
-        throw customErr;
-      }
+    } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_EMAIL_SIGN_UP_FAILED', action: 'signUpWithEmail' });
       throw error;
-    }
-  }
-
-  /**
-   * Initiates Google Sign-In via full-page redirect.
-   * Highly recommended for iOS Safari and mobile browsers where popups are blocked.
-   */
-  public async signInWithGoogleRedirect(): Promise<void> {
-    const auth = getFirebaseAuth();
-    try {
-      const provider = new GoogleAuthProvider();
-      provider.setCustomParameters({ prompt: 'select_account' });
-      await signInWithRedirect(auth, provider);
-    } catch (error: any) {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'deployed domain';
-      if (error?.code === 'auth/unauthorized-domain') {
-        const msg = `Google Sign-In blocked: "${host}" is not listed in Firebase Authorized Domains. Add "${host}" in Firebase Console > Authentication > Settings > Authorized domains.`;
-        const domainErr = new Error(msg);
-        (domainErr as any).code = 'auth/unauthorized-domain';
-        errorHandler.capture(domainErr, { errorCode: 'AUTH_UNAUTHORIZED_DOMAIN', action: 'signInWithGoogleRedirect' });
-        throw domainErr;
-      }
-      errorHandler.capture(error, { errorCode: 'AUTH_SIGN_IN_FAILED', action: 'signInWithGoogleRedirect' });
-      throw error;
-    }
-  }
-
-  /**
-   * Checks for a returning Google redirect authentication credential
-   */
-  public async checkRedirectResult(): Promise<User | null> {
-    const auth = getFirebaseAuth();
-    try {
-      const credential = await getRedirectResult(auth);
-      if (credential?.user) {
-        const user = mapFirebaseUser(credential.user);
-        logger.log('security_event', 'info', `User signed in via Google redirect: ${user.uid}`, { userId: user.uid });
-        return user;
-      }
-      return null;
-    } catch (error: any) {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'deployed domain';
-      if (error?.code === 'auth/unauthorized-domain') {
-        const msg = `Google Sign-In blocked: "${host}" is not listed in Firebase Authorized Domains. Add "${host}" in Firebase Console > Authentication > Settings > Authorized domains.`;
-        const domainErr = new Error(msg);
-        (domainErr as any).code = 'auth/unauthorized-domain';
-        throw domainErr;
-      }
-      console.warn('[AuthService] Redirect result note:', error?.message || error);
-      return null;
     }
   }
 
@@ -270,48 +181,27 @@ class FirebaseAuthService implements IAuthService {
       const user = mapFirebaseUser(credential.user);
       logger.log('security_event', 'info', `User signed in with Google: ${user.uid}`, { userId: user.uid });
       return user;
-    } catch (error: any) {
-      const host = typeof window !== 'undefined' ? window.location.hostname : 'deployed domain';
-      if (error?.code === 'auth/unauthorized-domain') {
-        const msg = `Google Sign-In blocked: "${host}" is not listed in Firebase Authorized Domains. Add "${host}" in Firebase Console > Authentication > Settings > Authorized domains, or use 1-Tap Phone Sign-In.`;
-        const domainErr = new Error(msg);
-        (domainErr as any).code = 'auth/unauthorized-domain';
-        errorHandler.capture(domainErr, { errorCode: 'AUTH_UNAUTHORIZED_DOMAIN', action: 'signInWithGoogle' });
-        throw domainErr;
-      }
-      if (error?.code === 'auth/popup-closed-by-user') {
-        const msg = 'Google popup was closed before sign-in completed. On iPhone/Safari, use "Google Sign-In (Redirect Mode)" or 1-Tap Phone Sign-In below!';
-        const popupErr = new Error(msg);
-        (popupErr as any).code = 'auth/popup-closed-by-user';
-        throw popupErr;
-      }
-      if (error?.code === 'auth/network-request-failed' || error?.message?.includes('network')) {
-        const msg = `Connection to Firebase Auth was refused. Please ensure "${host}" is added to Firebase Authorized Domains, or use 1-Tap Phone Sign-In.`;
-        const netErr = new Error(msg);
-        (netErr as any).code = 'auth/network-request-failed';
-        throw netErr;
-      }
-      if (error?.code === 'auth/popup-blocked') {
-        const msg = 'Safari or Chrome blocked the popup window. Tap "Google Sign-In (Redirect Mode)" or use 1-Tap Phone Sign-In below.';
-        const popupErr = new Error(msg);
-        (popupErr as any).code = 'auth/popup-blocked';
-        errorHandler.capture(popupErr, { errorCode: 'AUTH_POPUP_BLOCKED', action: 'signInWithGoogle' });
-        throw popupErr;
-      }
+    } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_SIGN_IN_FAILED', action: 'signInWithGoogle' });
       throw error;
     }
   }
 
   /**
-   * Anonymous Authentication for quick investor access
+   * Anonymous Authentication is disabled for production.
+   * Isolated only to local development emulator environments.
    */
   public async signInAnonymously(): Promise<User> {
+    if (ENV.isProduction || !ENV.useEmulator) {
+      throw new Error(
+        'Anonymous Authentication is disabled for this project. Please sign in with Google or Email/Password.'
+      );
+    }
     const auth = getFirebaseAuth();
     try {
       const credential = await fbSignInAnonymously(auth);
       const user = mapFirebaseUser(credential.user);
-      logger.log('security_event', 'info', `User signed in anonymously: ${user.uid}`, { userId: user.uid });
+      logger.log('security_event', 'info', `User signed in anonymously (emulator): ${user.uid}`, { userId: user.uid });
       return user;
     } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_ANON_SIGN_IN_FAILED', action: 'signInAnonymously' });
@@ -328,20 +218,6 @@ class FirebaseAuthService implements IAuthService {
     } catch (error) {
       errorHandler.capture(error, { errorCode: 'AUTH_SIGN_OUT_FAILED', action: 'signOut' });
       throw error;
-    }
-  }
-
-  public async updateCurrentUserProfile(displayName: string, photoURL?: string): Promise<void> {
-    try {
-      const auth = getFirebaseAuth();
-      if (auth.currentUser) {
-        await updateProfile(auth.currentUser, {
-          displayName,
-          ...(photoURL ? { photoURL } : {}),
-        });
-      }
-    } catch (err) {
-      console.warn('[AuthService] Profile update notice:', err);
     }
   }
 

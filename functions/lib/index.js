@@ -4,12 +4,10 @@
  * All callable functions exported here for deployment.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getSystemHealth = exports.setAdminClaim = exports.recoverAccount = exports.requestAccountDeletion = exports.getAccountState = exports.activateCompanyAbility = exports.submitMarketChoice = exports.resolveAuction = exports.passAuction = exports.placeBid = exports.createAuction = exports.executeBotTurn = exports.startSpaceAuction = exports.buyProperty = exports.completeTurn = exports.executeSPAction = exports.submitMovementDecision = exports.requestRoll = exports.removeBotPlayer = exports.addBotPlayer = exports.reconnectMatch = exports.getMatchState = exports.startMatch = exports.leaveMatch = exports.joinMatch = exports.joinMatchByAccessCode = exports.findOrCreateQuickMatch = exports.createMatch = void 0;
+exports.getSystemHealth = exports.setAdminClaim = exports.recoverAccount = exports.requestAccountDeletion = exports.getAccountState = exports.activateCompanyAbility = exports.submitMarketChoice = exports.resolveAuction = exports.passAuction = exports.placeBid = exports.createAuction = exports.executeBotTurn = exports.startSpaceAuction = exports.buyProperty = exports.completeTurn = exports.executeSPAction = exports.submitMovementDecision = exports.requestRoll = exports.removeBotPlayer = exports.addBotPlayer = exports.reconnectMatch = exports.getMatchState = exports.startMatch = exports.leaveMatch = exports.joinMatch = exports.createMatch = void 0;
 // Match functions
 var matchFunctions_1 = require("./match/matchFunctions");
 Object.defineProperty(exports, "createMatch", { enumerable: true, get: function () { return matchFunctions_1.createMatch; } });
-Object.defineProperty(exports, "findOrCreateQuickMatch", { enumerable: true, get: function () { return matchFunctions_1.findOrCreateQuickMatch; } });
-Object.defineProperty(exports, "joinMatchByAccessCode", { enumerable: true, get: function () { return matchFunctions_1.joinMatchByAccessCode; } });
 Object.defineProperty(exports, "joinMatch", { enumerable: true, get: function () { return matchFunctions_1.joinMatch; } });
 Object.defineProperty(exports, "leaveMatch", { enumerable: true, get: function () { return matchFunctions_1.leaveMatch; } });
 Object.defineProperty(exports, "startMatch", { enumerable: true, get: function () { return matchFunctions_1.startMatch; } });

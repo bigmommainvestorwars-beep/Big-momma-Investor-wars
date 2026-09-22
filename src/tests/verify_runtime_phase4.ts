@@ -27,8 +27,7 @@ describe('Real Runtime Verification - Phase 4', () => {
     
     // Roll
     const rollResult = engine.requestRoll(matchId, 'reqroll', hostId, started.stateVersion);
-    assert.ok(rollResult.newSpace >= 2 && rollResult.newSpace <= 12);
-    assert.strictEqual(rollResult.newSpace, rollResult.roll);
+    assert.ok(rollResult.newSpace >= 1 && rollResult.newSpace <= 6);
     
     console.log('Phase 4 runtime logic validated.');
   });

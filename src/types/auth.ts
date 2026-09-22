@@ -21,17 +21,8 @@ export interface UserProfile {
   rating?: number;
 }
 
-export type AuthLifecycleStatus =
-  | 'AUTH_INITIALIZING'
-  | 'AUTHENTICATING'
-  | 'AUTHENTICATED'
-  | 'AUTH_UNAUTHENTICATED'
-  | 'AUTH_ERROR'
-  | 'AUTH_REAUTHENTICATING';
-
 export interface AuthState {
   isAuthenticated: boolean;
-  status: AuthLifecycleStatus;
   user: User | null;
   isLoading: boolean;
   error: string | null;

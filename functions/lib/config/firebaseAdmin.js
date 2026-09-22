@@ -22,8 +22,7 @@ function getAdminApp() {
     }
     // Uses Google Cloud Application Default Credentials (ADC) / IAM automatically
     // via FIREBASE_CONFIG or GOOGLE_APPLICATION_CREDENTIALS
-    const projectId = process.env.GCLOUD_PROJECT || (process.env.FIREBASE_CONFIG ? undefined : 'bigmomma-investor-wars');
-    adminApp = projectId ? (0, app_1.initializeApp)({ projectId }) : (0, app_1.initializeApp)();
+    adminApp = (0, app_1.initializeApp)();
     return adminApp;
 }
 function getAdminFirestore() {

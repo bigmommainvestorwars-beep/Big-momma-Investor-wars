@@ -23,7 +23,6 @@ import {
   DEFAULT_MARKET_EVENTS,
   MarketEventDefinition,
 } from '../config/marketEventConfig';
-import { TEST_ROOM_CODE, TEST_MATCH_ID, IS_TEST_ROOM_MODE } from '../config/testRoomConfig';
 
 export interface ActiveMatchModifier {
   id: string;
@@ -72,116 +71,16 @@ export class AuthoritativeServerEngine {
       };
     });
     matchSyncService.registerLocalOpenMatchesProvider(() => this.getOpenMatches());
-    matchSyncService.registerPlayerSyncCallback((matchId, players) => {
-      this.syncPlayers(matchId, players);
-    });
-    matchSyncService.registerMatchSyncCallback((matchId, matchDoc) => {
-      const container = this.matches.get(matchId);
-      if (container) {
-        Object.assign(container.match, matchDoc);
-      }
-    });
-  }
-
-  public syncPlayers(matchId: string, players: FirestorePlayerDoc[]): void {
-    const container = this.matches.get(matchId);
-    if (!container) return;
-    container.players.clear();
-    for (const p of players) {
-      container.players.set(p.id, { ...p });
-      if (!container.match.participantUserIds.includes(p.id)) {
-        container.match.participantUserIds.push(p.id);
-      }
-    }
-  }
-
-  public removeLobbyPlayer(matchId: string, requestId: string, targetPlayerId: string): void {
-    const container = this.matches.get(matchId);
-    if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
-    if (container.match.status !== 'waiting_for_players') {
-      throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Cannot remove players once match started.');
-    }
-
-    const player = container.players.get(targetPlayerId);
-    if (!player) return;
-    if (player.id === container.match.hostUserId) {
-      throw new ServerFunctionError(SERVER_ERROR_CODES.AUTH_FORBIDDEN, 'Cannot remove host from lobby.');
-    }
-
-    container.players.delete(targetPlayerId);
-    container.match.participantUserIds = container.match.participantUserIds.filter((id) => id !== targetPlayerId);
-
-    // Re-index turn order
-    let order = 0;
-    for (const p of container.players.values()) {
-      p.turnOrder = order++;
-    }
-    this.incrementVersion(container.match);
-    this.appendLog(container, 'PLAYER_REMOVED', `${player.displayName} removed from lobby.`);
-    this.emitStateChange(container);
-  }
-
-  public resetLobby(
-    matchId: string,
-    requestId: string,
-    hostUserId: string,
-    hostDisplayName: string
-  ): AuthoritativeMatchContainer {
-    const container = this.matches.get(matchId);
-    if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
-
-    container.match.status = 'waiting_for_players';
-    container.match.currentPhase = 'LOBBY';
-    container.match.hostUserId = hostUserId;
-    container.match.participantUserIds = [hostUserId];
-    container.match.turnNumber = 0;
-    container.match.roundNumber = 0;
-    container.match.currentPlayerId = null;
-    container.match.updatedAt = Date.now();
-    this.incrementVersion(container.match);
-
-    container.players.clear();
-    const hostPlayer: FirestorePlayerDoc = {
-      id: hostUserId,
-      userId: hostUserId,
-      displayName: hostDisplayName,
-      currentSpaceIndex: 0,
-      status: 'active',
-      turnOrder: 0,
-      netWorth: 1500,
-      cash: 1500,
-      specialPoints: 50,
-      ownedSpaceIds: [],
-      mortgagedSpaceIds: [],
-      companyShareIds: [],
-      modifierIds: [],
-      isBot: false,
-      connected: true,
-      lastActiveAt: Date.now(),
-    };
-    container.players.set(hostUserId, hostPlayer);
-    container.logs = [];
-    this.appendLog(container, 'LOBBY_RESET', `Lobby reset by host ${hostDisplayName}.`);
-    this.emitStateChange(container);
-    return container;
   }
 
   public getOpenMatches(): FirestoreMatchDoc[] {
     const list: FirestoreMatchDoc[] = [];
     for (const container of this.matches.values()) {
-      if (
-        container.match.status === 'waiting_for_players' &&
-        !container.match.isPrivate &&
-        container.players.size < 4
-      ) {
+      if (container.match.status === 'waiting_for_players') {
         list.push({ ...container.match });
       }
     }
     return list;
-  }
-
-  public getAllMatches(): AuthoritativeMatchContainer[] {
-    return Array.from(this.matches.values());
   }
 
   public static getInstance(): AuthoritativeServerEngine {
@@ -213,28 +112,6 @@ export class AuthoritativeServerEngine {
     return Array.from(container.players.values()).sort((a, b) => a.turnOrder - b.turnOrder);
   }
 
-  public hydrateMatchContainer(
-    matchDoc: FirestoreMatchDoc,
-    players: FirestorePlayerDoc[]
-  ): AuthoritativeMatchContainer {
-    const playersMap = new Map<string, FirestorePlayerDoc>();
-    for (const p of players) {
-      playersMap.set(p.id, { ...p });
-    }
-    const container: AuthoritativeMatchContainer = {
-      match: { ...matchDoc },
-      players: playersMap,
-      logs: [],
-      activeAuction: null,
-      activeModifiers: [],
-      activeMarketEvent: null,
-      pendingMarketChoice: null,
-    };
-    this.matches.set(matchDoc.id, container);
-    this.emitStateChange(container);
-    return container;
-  }
-
   private emitStateChange(container: AuthoritativeMatchContainer): void {
     const playersList = Array.from(container.players.values()).sort((a, b) => a.turnOrder - b.turnOrder);
     matchSyncService.dispatchLocalUpdate(
@@ -249,7 +126,7 @@ export class AuthoritativeServerEngine {
   }
 
   private assertMatchActive(match: FirestoreMatchDoc): void {
-    if (match.status !== 'active' && match.status !== 'in_progress') {
+    if (match.status !== 'in_progress') {
       throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_ACTIVE, 'Match is not in progress.');
     }
   }
@@ -299,9 +176,7 @@ export class AuthoritativeServerEngine {
     boardId: string = 'default-standard-board',
     rulesetVersion: string = '1.0.0',
     hostUserId: string = 'host_user_1',
-    hostDisplayName: string = 'Investor (Host)',
-    isPrivate: boolean = false,
-    accessCode?: string
+    hostDisplayName: string = 'Investor (Host)'
   ): FirestoreMatchDoc {
     if (this.processedRequests.has(requestId)) {
       const existing = this.matches.get(matchId);
@@ -309,53 +184,8 @@ export class AuthoritativeServerEngine {
     }
     this.processedRequests.add(requestId);
 
-    const isTestRoom =
-      matchId === TEST_MATCH_ID ||
-      accessCode === TEST_ROOM_CODE ||
-      (IS_TEST_ROOM_MODE && isPrivate && !accessCode);
-
-    const targetMatchId = isTestRoom ? TEST_MATCH_ID : matchId;
-    const generatedCode = isTestRoom
-      ? TEST_ROOM_CODE
-      : (accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`);
-
-    const existingContainer = this.matches.get(targetMatchId);
-    if (existingContainer && isTestRoom) {
-      // Clean reset of test lobby for new host session
-      existingContainer.match.status = 'waiting_for_players';
-      existingContainer.match.currentPhase = 'LOBBY';
-      existingContainer.match.hostUserId = hostUserId;
-      existingContainer.match.participantUserIds = [hostUserId];
-      existingContainer.match.accessCode = TEST_ROOM_CODE;
-      existingContainer.match.stateVersion += 1;
-      existingContainer.match.updatedAt = Date.now();
-      existingContainer.players.clear();
-      existingContainer.players.set(hostUserId, {
-        id: hostUserId,
-        userId: hostUserId,
-        displayName: hostDisplayName,
-        currentSpaceIndex: 0,
-        status: 'active',
-        turnOrder: 0,
-        netWorth: 1500,
-        cash: 1500,
-        specialPoints: 50,
-        ownedSpaceIds: [],
-        mortgagedSpaceIds: [],
-        companyShareIds: [],
-        modifierIds: [],
-        isBot: false,
-        connected: true,
-        lastActiveAt: Date.now(),
-      });
-      existingContainer.logs = [];
-      this.appendLog(existingContainer, 'MATCH_CREATED', `Test match lobby created by ${hostDisplayName}.`, hostUserId);
-      this.emitStateChange(existingContainer);
-      return existingContainer.match;
-    }
-
     const match: FirestoreMatchDoc = {
-      id: targetMatchId,
+      id: matchId,
       hostUserId,
       boardId,
       rulesetVersion,
@@ -366,8 +196,6 @@ export class AuthoritativeServerEngine {
       roundNumber: 0,
       stateVersion: 1,
       participantUserIds: [hostUserId],
-      isPrivate: isTestRoom ? true : isPrivate,
-      accessCode: generatedCode,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -512,14 +340,7 @@ export class AuthoritativeServerEngine {
       throw new ServerFunctionError(SERVER_ERROR_CODES.ACTION_LIMIT_REACHED, 'Match lobby is full (max 4 players).');
     }
     if (container.players.has(userId)) {
-      const existing = container.players.get(userId)!;
-      existing.connected = true;
-      existing.lastActiveAt = Date.now();
-      if (existing.status === 'disconnected') {
-        existing.status = 'active';
-      }
-      this.emitStateChange(container);
-      return existing;
+      return container.players.get(userId)!;
     }
     const newPlayer: FirestorePlayerDoc = {
       id: userId,
@@ -550,39 +371,17 @@ export class AuthoritativeServerEngine {
   /**
    * 3c. leaveMatch
    */
-  public leaveMatch(
-    matchId: string,
-    requestId: string,
-    userId: string
-  ): { success: boolean; isMatchAbandoned: boolean; matchId: string } {
+  public leaveMatch(matchId: string, requestId: string, userId: string): void {
     const container = this.matches.get(matchId);
-    if (!container) return { success: true, isMatchAbandoned: true, matchId };
+    if (!container) return;
     container.players.delete(userId);
     container.match.participantUserIds = container.match.participantUserIds.filter((id) => id !== userId);
-    
-    const remainingHumans = Array.from(container.players.values()).filter((p) => !p.isBot);
-
-    // If host leaves, assign to remaining human player or mark abandoned
     if (container.match.hostUserId === userId) {
-      if (remainingHumans.length > 0) {
-        container.match.hostUserId = remainingHumans[0].userId;
-      } else {
-        container.match.status = 'abandoned';
-        container.match.accessCode = '';
-        this.matches.delete(matchId);
-        this.emitStateChange(container);
-        return { success: true, isMatchAbandoned: true, matchId };
+      const remaining = Array.from(container.players.values()).find((p) => !p.isBot);
+      if (remaining) {
+        container.match.hostUserId = remaining.userId;
       }
     }
-
-    if (remainingHumans.length === 0 || container.players.size === 0) {
-      container.match.status = 'abandoned';
-      container.match.accessCode = '';
-      this.matches.delete(matchId);
-      this.emitStateChange(container);
-      return { success: true, isMatchAbandoned: true, matchId };
-    }
-
     let order = 0;
     for (const p of container.players.values()) {
       p.turnOrder = order++;
@@ -590,284 +389,6 @@ export class AuthoritativeServerEngine {
     this.incrementVersion(container.match);
     this.appendLog(container, 'PLAYER_LEFT', `Player left the lobby.`, userId);
     this.emitStateChange(container);
-    return { success: true, isMatchAbandoned: false, matchId };
-  }
-
-  /**
-   * Cleans up inactive lobbies (> 5 mins since last activity)
-   * or lobbies with zero human players.
-   */
-  public cleanupStaleLobbies(maxAgeMs = 5 * 60 * 1000): string[] {
-    const now = Date.now();
-    const staleMatchIds: string[] = [];
-    for (const [id, container] of this.matches.entries()) {
-      const lastActive = container.match.updatedAt || container.match.createdAt || 0;
-      const isLobby = container.match.status === 'waiting_for_players';
-      const isStale = now - lastActive > maxAgeMs;
-      const remainingHumans = Array.from(container.players.values()).filter((p) => !p.isBot);
-
-      if ((isLobby && isStale) || remainingHumans.length === 0 || container.players.size === 0) {
-        container.match.status = 'abandoned';
-        container.match.accessCode = '';
-        staleMatchIds.push(id);
-        this.matches.delete(id);
-      }
-    }
-    return staleMatchIds;
-  }
-
-  /**
-   * Immediately deletes all open unstarted lobbies
-   */
-  public deleteAllOpenLobbies(): string[] {
-    const deletedMatchIds: string[] = [];
-    for (const [id, container] of this.matches.entries()) {
-      if (container.match.status === 'waiting_for_players') {
-        container.match.status = 'abandoned';
-        container.match.accessCode = '';
-        deletedMatchIds.push(id);
-        this.matches.delete(id);
-      }
-    }
-    return deletedMatchIds;
-  }
-
-  /**
-   * 3d. reconnectPlayer (Resilience handshake when switching network interfaces on mobile)
-   */
-  public reconnectPlayer(
-    matchId: string,
-    requestId: string,
-    userId: string,
-    displayName?: string
-  ): { success: boolean; stateVersion: number; player: FirestorePlayerDoc | null; sessionExpired?: boolean } {
-    let container = this.matches.get(matchId);
-
-    // If test room mode and target is test match or test code, check if container exists
-    if (!container && (matchId === TEST_MATCH_ID || (IS_TEST_ROOM_MODE && (!matchId || matchId.includes('test') || matchId === 'match_test_bm_0x9x')))) {
-      container = this.matches.get(TEST_MATCH_ID);
-    }
-
-    if (!container) {
-      return {
-        success: false,
-        stateVersion: 0,
-        player: null,
-        sessionExpired: true,
-      };
-    }
-
-    let player = container.players.get(userId);
-    if (!player) {
-      if (container.match.status === 'waiting_for_players' && container.players.size < 4) {
-        player = this.joinMatch(container.match.id, requestId, userId, displayName || 'Investor');
-      } else {
-        return {
-          success: false,
-          stateVersion: container.match.stateVersion,
-          player: null,
-          sessionExpired: true,
-        };
-      }
-    }
-
-    player.connected = true;
-    if (player.status === 'disconnected') {
-      player.status = 'active';
-    }
-    player.lastActiveAt = Date.now();
-    this.incrementVersion(container.match);
-    this.appendLog(container, 'PLAYER_RECONNECTED', `${player.displayName} reconnected via handshake.`, userId);
-    this.emitStateChange(container);
-    return {
-      success: true,
-      stateVersion: container.match.stateVersion,
-      player: { ...player },
-      sessionExpired: false,
-    };
-  }
-
-  /**
-   * 3e. markPlayerDisconnected (Temporary network drop or interface switch)
-   */
-  public markPlayerDisconnected(matchId: string, userId: string): void {
-    const container = this.matches.get(matchId);
-    if (!container) return;
-    const player = container.players.get(userId);
-    if (!player) return;
-    player.connected = false;
-    if (player.status === 'active') {
-      player.status = 'disconnected';
-    }
-    player.lastActiveAt = Date.now();
-    this.incrementVersion(container.match);
-    this.appendLog(container, 'PLAYER_DISCONNECTED', `${player.displayName} temporarily disconnected.`, userId);
-    this.emitStateChange(container);
-  }
-
-  /**
-   * 3f. findOrCreateQuickMatch
-   * Resolves quick-match queue by joining the first open public lobby or creating a new one.
-   */
-  public findOrCreateQuickMatch(
-    requestId: string,
-    userId: string,
-    displayName: string,
-    options?: { isPrivate?: boolean; accessCode?: string }
-  ): { matchId: string; isNew: boolean; accessCode: string; player: FirestorePlayerDoc } {
-    this.cleanupStaleLobbies();
-    // 1. Check for open public lobby if not private
-    if (!options?.isPrivate) {
-      for (const [id, container] of this.matches.entries()) {
-        if (
-          container.match.status === 'waiting_for_players' &&
-          !container.match.isPrivate &&
-          container.players.size < 4
-        ) {
-          const player = this.joinMatch(id, requestId, userId, displayName);
-          return {
-            matchId: id,
-            isNew: false,
-            accessCode: container.match.accessCode || id.slice(-6).toUpperCase(),
-            player,
-          };
-        }
-      }
-    }
-
-    // 2. Create new match lobby
-    const newMatchId = `match_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    const accessCode =
-      options?.accessCode || `BM-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    this.createMatch(
-      newMatchId,
-      requestId,
-      'default-standard-board',
-      '1.0.0',
-      userId,
-      displayName,
-      options?.isPrivate ?? false,
-      accessCode
-    );
-
-    const container = this.matches.get(newMatchId)!;
-    const player = container.players.get(userId)!;
-    return {
-      matchId: newMatchId,
-      isNew: true,
-      accessCode,
-      player,
-    };
-  }
-
-  public findMatchIdByAccessCode(accessCode: string): string | undefined {
-    const cleanCode = accessCode.trim().toUpperCase();
-    const rawCode = cleanCode.replace(/^BM-/, '');
-    const bmCode = `BM-${rawCode}`;
-
-    for (const [id, container] of this.matches.entries()) {
-      const matchCode = (container.match.accessCode || '').toUpperCase();
-      const matchRawCode = matchCode.replace(/^BM-/, '');
-      const matchIdClean = id.toUpperCase();
-      if (
-        matchCode === cleanCode ||
-        matchCode === bmCode ||
-        matchRawCode === rawCode ||
-        matchIdClean === cleanCode ||
-        matchIdClean === bmCode ||
-        matchIdClean.endsWith(rawCode) ||
-        matchIdClean.endsWith(cleanCode) ||
-        id === accessCode.trim()
-      ) {
-        return id;
-      }
-    }
-    return undefined;
-  }
-
-  /**
-   * 3g. joinMatchByAccessCode
-   * Allows joining private or public lobbies via 6-character access code or match ID.
-   */
-  public joinMatchByAccessCode(
-    accessCode: string,
-    requestId: string,
-    userId: string,
-    displayName: string
-  ): { matchId: string; player: FirestorePlayerDoc } {
-    this.cleanupStaleLobbies();
-    const cleanCode = accessCode.trim().toUpperCase();
-    const rawCode = cleanCode.replace(/^BM-/, '');
-    const bmCode = `BM-${rawCode}`;
-
-    if (IS_TEST_ROOM_MODE) {
-      const isTestCode =
-        cleanCode === TEST_ROOM_CODE ||
-        rawCode === '0X9X' ||
-        cleanCode.includes('0X9X') ||
-        cleanCode === TEST_MATCH_ID.toUpperCase();
-
-      if (isTestCode) {
-        const container = this.matches.get(TEST_MATCH_ID);
-        if (container) {
-          const player = this.joinMatch(TEST_MATCH_ID, requestId, userId, displayName);
-          return { matchId: TEST_MATCH_ID, player };
-        }
-        throw new ServerFunctionError(
-          SERVER_ERROR_CODES.MATCH_NOT_FOUND,
-          'Lobby not found. Host must create the match first.'
-        );
-      }
-    }
-
-    for (const [id, container] of this.matches.entries()) {
-      const matchCode = (container.match.accessCode || '').toUpperCase();
-      const matchRawCode = matchCode.replace(/^BM-/, '');
-      const matchIdClean = id.toUpperCase();
-
-      const matchesThis =
-        matchCode === cleanCode ||
-        matchCode === bmCode ||
-        matchRawCode === rawCode ||
-        matchIdClean === cleanCode ||
-        matchIdClean === bmCode ||
-        matchIdClean.endsWith(rawCode) ||
-        matchIdClean.endsWith(cleanCode) ||
-        id === accessCode.trim();
-
-      if (matchesThis) {
-        if (container.match.status === 'abandoned' || (container.match as any).isDeleted) {
-          throw new ServerFunctionError(
-            SERVER_ERROR_CODES.MATCH_NOT_FOUND,
-            `Lobby "${cleanCode}" was closed or abandoned due to inactivity.`
-          );
-        }
-        if (container.match.status === 'in_progress' || container.match.status === 'active') {
-          throw new ServerFunctionError(
-            SERVER_ERROR_CODES.INVALID_STATE_TRANSITION,
-            `Match "${cleanCode}" is already in progress and can no longer be joined.`
-          );
-        }
-        if (container.match.status === 'completed') {
-          throw new ServerFunctionError(
-            SERVER_ERROR_CODES.INVALID_STATE_TRANSITION,
-            `Match "${cleanCode}" has already concluded.`
-          );
-        }
-        if (container.players.size >= 4) {
-          throw new ServerFunctionError(
-            SERVER_ERROR_CODES.ACTION_LIMIT_REACHED,
-            `Lobby "${cleanCode}" is full (maximum 4 players).`
-          );
-        }
-        const player = this.joinMatch(id, requestId, userId, displayName);
-        return { matchId: id, player };
-      }
-    }
-    throw new ServerFunctionError(
-      SERVER_ERROR_CODES.MATCH_NOT_FOUND,
-      `No active lobby found for room code "${cleanCode}". Please verify the code or host a new match.`
-    );
   }
 
   /**
@@ -877,9 +398,6 @@ export class AuthoritativeServerEngine {
     const container = this.matches.get(matchId);
     if (!container) throw new ServerFunctionError(SERVER_ERROR_CODES.MATCH_NOT_FOUND, 'Match not found.');
     if (container.match.status !== 'waiting_for_players') {
-      if (container.match.status === 'active' || container.match.status === 'in_progress') {
-        return container.match;
-      }
       throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'Match is not in lobby state.');
     }
 
@@ -887,13 +405,7 @@ export class AuthoritativeServerEngine {
       throw new ServerFunctionError(SERVER_ERROR_CODES.INVALID_STATE_TRANSITION, 'At least 2 players required to start.');
     }
 
-    // Sort and normalize player turn orders sequentially
-    const sortedPlayers = Array.from(container.players.values()).sort((a, b) => (a.turnOrder ?? 0) - (b.turnOrder ?? 0));
-    sortedPlayers.forEach((p, idx) => {
-      p.turnOrder = idx;
-    });
-
-    const firstPlayer = sortedPlayers[0];
+    const firstPlayer = Array.from(container.players.values()).find((p) => p.turnOrder === 0);
     container.match.status = 'in_progress';
     container.match.currentPhase = 'TURN_START';
     container.match.currentPlayerId = firstPlayer?.id || null;
@@ -937,19 +449,10 @@ export class AuthoritativeServerEngine {
     }
 
     // Roll: use client predetermined roll if valid 2-12, otherwise generate random 2-12 (sum of two D6)
-    let d1: number;
-    let d2: number;
-    if (typeof predeterminedRoll === 'number' && predeterminedRoll >= 2 && predeterminedRoll <= 12) {
-      const targetSum = Math.floor(predeterminedRoll);
-      d1 = Math.min(6, Math.max(1, Math.floor(targetSum / 2)));
-      d2 = targetSum - d1;
-    } else {
-      d1 = Math.floor(Math.random() * 6) + 1;
-      d2 = Math.floor(Math.random() * 6) + 1;
-    }
-    const roll = d1 + d2;
-    match.lastRoll = [d1, d2];
-    match.lastRollPlayerId = player.id;
+    const roll =
+      typeof predeterminedRoll === 'number' && predeterminedRoll >= 2 && predeterminedRoll <= 12
+        ? Math.floor(predeterminedRoll)
+        : (Math.floor(Math.random() * 6) + 1) + (Math.floor(Math.random() * 6) + 1);
     const totalSpaces = DEFAULT_STANDARD_SPACES.length;
     const oldSpace = player.currentSpaceIndex;
     const passedGo = oldSpace + roll >= totalSpaces;
@@ -1697,8 +1200,6 @@ export class AuthoritativeServerEngine {
 
     match.roundNumber = nextRound;
     match.currentPhase = 'TURN_START';
-    match.lastRoll = undefined;
-    match.lastRollPlayerId = undefined;
 
     const newVersion = this.incrementVersion(match);
     this.appendLog(
